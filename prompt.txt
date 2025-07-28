@@ -1,0 +1,10 @@
+观察coo.py的build函数需要的输入格式，与ategory_id.txt的类别映射，写一个数据标签格式转换脚本，把dataset\annotations\train_labels，val_labels，test_labels的所有标签文件转换成dataset\annotations\instances_train2017.json(已写出模板，可根据build函数需要的输入格式改进),instances_val2017.json,image_info_test-dev2017.json.
+
+rfdetr\main.py的trainer函数中-coco_dir的默认参数值设为相对路径dataset
+
+rfdetr\engine.py根据train_one_epoch函数的outputs = model(new_samples, new_targets)的outputs，新建一个前向传播生成的检测框图片保存的函数，以outputs为输入参数保存在../result目录下，并在rfdetr\main.py添加修改说明
+
+1.改进检测图片保存逻辑，选择100张代表图像，在result文件夹下以图片名为文件夹名，每个文件夹下是同一图片在不同训练阶段的检测图片，有真实框与检测框
+2.为tensorboard添加模拟应用时batchsize为1推理时前向传播的fps的速度指标（注意不要计入检测图片生成与反向传播时间）与map精度指标的计算与曲线展示，并且训练时也打印这两个指标
+
+我推理生成的分类全是car的分类正常吗
