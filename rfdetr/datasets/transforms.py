@@ -126,8 +126,14 @@ def resize(image, target, size, max_size=None):
     size = get_size(image.size, size, max_size)
     rescaled_image = F.resize(image, size)
 
+    # Calculate padding to make dimensions divisible by 14
+    w, h = rescaled_image.size
+    pad_w = (14 - (w % 14)) % 14
+    pad_h = (14 - (h % 14)) % 14
+    padded_image = F.pad(rescaled_image, (0, 0, pad_w, pad_h))
+
     if target is None:
-        return rescaled_image, None
+        return padded_image, None
 
     ratios = tuple(
         float(s) / float(s_orig) for s, s_orig in zip(rescaled_image.size, image.size))
@@ -145,15 +151,14 @@ def resize(image, target, size, max_size=None):
         scaled_area = area * (ratio_width * ratio_height)
         target["area"] = scaled_area
 
-    h, w = size
-    target["size"] = torch.tensor([h, w])
+    # Update target size to padded image size
+    target["size"] = torch.tensor([h + pad_h, w + pad_w])
 
     if "masks" in target:
         target['masks'] = interpolate(
-            target['masks'][:, None].float(), size, mode="nearest")[:, 0] > 0.5
+            target['masks'][:, None].float(), (h + pad_h, w + pad_w), mode="nearest")[:, 0] > 0.5
     
-
-    return rescaled_image, target
+    return padded_image, target
 
 
 def pad(image, target, padding):
@@ -231,10 +236,17 @@ class SquareResize(object):
 
     def __call__(self, img, target=None):
         size = random.choice(self.sizes)
-        rescaled_img=F.resize(img, (size, size))
+        rescaled_img = F.resize(img, (size, size))
+
+        # Calculate padding to make dimensions divisible by 14
         w, h = rescaled_img.size
+        pad_w = (14 - (w % 14)) % 14
+        pad_h = (14 - (h % 14)) % 14
+        padded_image = F.pad(rescaled_img, (0, 0, pad_w, pad_h))
+
         if target is None:
-            return rescaled_img, None
+            return padded_image, None
+
         ratios = tuple(
             float(s) / float(s_orig) for s, s_orig in zip(rescaled_img.size, img.size))
         ratio_width, ratio_height = ratios
@@ -251,9 +263,10 @@ class SquareResize(object):
             scaled_area = area * (ratio_width * ratio_height)
             target["area"] = scaled_area
 
-        target["size"] = torch.tensor([h, w])
+        # Update target size to padded image size
+        target["size"] = torch.tensor([h + pad_h, w + pad_w])
 
-        return rescaled_img, target
+        return padded_image, target
 
 
 class RandomPad(object):

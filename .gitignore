@@ -179,3 +179,7 @@ cython_debug/
 dataset/
 pretrain_weights/
 runs/
+
+# Output directories
+output/
+logs/

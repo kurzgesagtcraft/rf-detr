@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # RF-DETR: SOTA Real-Time Object Detection Model
 
 [![version](https://badge.fury.io/py/rfdetr.svg)](https://badge.fury.io/py/rfdetr)
@@ -669,7 +668,3 @@ If you find our work helpful for your research, please consider citing the follo
 ## Contribution
 
 We welcome and appreciate all contributions! If you notice any issues or bugs, have questions, or would like to suggest new features, please [open an issue](https://github.com/roboflow/rf-detr/issues/new) or pull request. By sharing your ideas and improvements, you help make RF-DETR better for everyone.
-=======
-# rf-detr
-RF-DETR: Rethinking Feature Shrinking for Real-Time Object Detection with Dual-Path Feature Refinement
->>>>>>> 47d8e5b786d661b9481a20ac7a749bcd885f3014

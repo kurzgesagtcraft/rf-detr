@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from transformers import AutoModel, AutoProcessor, AutoModelForCausalLM, AutoConfig, AutoBackbone
-from peft import LoraConfig, get_peft_model, PeftModel
+# from peft import LoraConfig, get_peft_model, PeftModel
 
 from rfdetr.util.misc import NestedTensor, is_main_process
 
@@ -123,9 +123,9 @@ class Backbone(BackboneBase):
         self._forward_origin = self.forward
         self.forward = self.forward_export
 
-        if isinstance(self.encoder, PeftModel):
-            print("Merging and unloading LoRA weights")
-            self.encoder.merge_and_unload()
+        # if isinstance(self.encoder, PeftModel):
+        #     print("Merging and unloading LoRA weights")
+        #     self.encoder.merge_and_unload()
 
     def forward(self, tensor_list: NestedTensor):
         """ """

@@ -25,13 +25,13 @@ from transformers.utils import (
     add_start_docstrings_to_model_forward,
     logging,
     replace_return_docstrings,
-    torch_int,
 )
 from transformers.utils.backbone_utils import BackboneMixin
 
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils.backbone_utils import BackboneConfigMixin, get_aligned_output_features_output_indices
 
+from torchvision.transforms import functional as F
 
 logger = logging.get_logger(__name__)
 
@@ -258,7 +258,7 @@ class WindowedDinov2WithRegistersEmbeddings(nn.Module):
         width = width // self.config.patch_size
 
         # Reshape for interpolation
-        sqrt_num_positions = torch_int(num_positions**0.5)
+        sqrt_num_positions = int(num_positions**0.5)
         patch_pos_embed = patch_pos_embed.reshape(1, sqrt_num_positions, sqrt_num_positions, dim)
         patch_pos_embed = patch_pos_embed.permute(0, 3, 1, 2)
 
@@ -268,7 +268,7 @@ class WindowedDinov2WithRegistersEmbeddings(nn.Module):
         # Interpolate at float32 precision
         patch_pos_embed = nn.functional.interpolate(
             patch_pos_embed.to(dtype=torch.float32),
-            size=(torch_int(height), torch_int(width)),  # Explicit size instead of scale_factor
+            size=(int(height), int(width)),  # Explicit size instead of scale_factor
             mode="bicubic",
             align_corners=False,
             antialias=True,
@@ -288,6 +288,16 @@ class WindowedDinov2WithRegistersEmbeddings(nn.Module):
     def forward(self, pixel_values: torch.Tensor, bool_masked_pos: Optional[torch.Tensor] = None) -> torch.Tensor:
         batch_size, _, height, width = pixel_values.shape
         target_dtype = self.patch_embeddings.projection.weight.dtype
+
+        # Ensure height and width are divisible by patch_size * num_windows
+        adjusted_height = (height // (self.config.patch_size * self.config.num_windows)) * (self.config.patch_size * self.config.num_windows)
+        adjusted_width = (width // (self.config.patch_size * self.config.num_windows)) * (self.config.patch_size * self.config.num_windows)
+
+        # Resize pixel_values to adjusted_height, adjusted_width before patch embedding
+        if adjusted_height != height or adjusted_width != width:
+            pixel_values = F.resize(pixel_values, (adjusted_height, adjusted_width))
+            batch_size, _, height, width = pixel_values.shape # Update height and width
+
         embeddings = self.patch_embeddings(pixel_values.to(dtype=target_dtype))
 
         if bool_masked_pos is not None:
@@ -312,7 +322,7 @@ class WindowedDinov2WithRegistersEmbeddings(nn.Module):
             num_w_patches_per_window = num_w_patches // self.config.num_windows
             num_h_patches_per_window = num_h_patches // self.config.num_windows
             num_windows = self.config.num_windows
-            windowed_pixel_tokens = pixel_tokens_with_pos_embed.view(batch_size, num_windows, num_h_patches_per_window, num_windows, num_h_patches_per_window, -1)
+            windowed_pixel_tokens = pixel_tokens_with_pos_embed.view(batch_size, num_windows, num_h_patches_per_window, num_windows, num_w_patches_per_window, -1)
             windowed_pixel_tokens = windowed_pixel_tokens.permute(0, 1, 3, 2, 4, 5)
             windowed_pixel_tokens = windowed_pixel_tokens.reshape(batch_size * num_windows ** 2, num_h_patches_per_window * num_w_patches_per_window, -1)
             windowed_cls_token_with_pos_embed = cls_token_with_pos_embed.repeat(num_windows ** 2, 1, 1)
@@ -583,7 +593,9 @@ class WindowedDinov2WithRegistersLayer(nn.Module):
     def __init__(self, config: WindowedDinov2WithRegistersConfig) -> None:
         super().__init__()
 
+        self.config = config
         self.num_windows = config.num_windows
+        config._attn_implementation = "eager"
 
         self.norm1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.attention = DINOV2_WITH_REGISTERS_ATTENTION_CLASSES[config._attn_implementation](config)
@@ -614,7 +626,16 @@ class WindowedDinov2WithRegistersLayer(nn.Module):
             # reshape x to remove windows
             B, HW, C = hidden_states.shape
             num_windows_squared = self.num_windows ** 2
-            hidden_states = hidden_states.view(B // num_windows_squared, num_windows_squared * HW, C)
+            
+            # Calculate the number of patches per window (excluding CLS and register tokens)
+            # HW is 1 (CLS) + num_register_tokens + num_patches_per_window
+            num_patches_per_window_actual = HW - 1 - self.config.num_register_tokens
+            
+            # Calculate the total number of tokens (including CLS and register tokens)
+            total_tokens = (1 + self.config.num_register_tokens + num_patches_per_window_actual) * num_windows_squared
+            
+            # Reshape to original batch size and total tokens (including CLS and register tokens)
+            hidden_states = hidden_states.view(B // num_windows_squared, total_tokens, C)
 
         self_attention_outputs = self.attention(
             self.norm1(hidden_states),  # in Dinov2WithRegisters, layernorm is applied before self-attention
@@ -624,11 +645,7 @@ class WindowedDinov2WithRegistersLayer(nn.Module):
         attention_output = self_attention_outputs[0]
 
         if run_full_attention:
-            # reshape x to add windows back
-            B, HW, C = hidden_states.shape
-            num_windows_squared = self.num_windows ** 2
-            # hidden_states = hidden_states.view(B * num_windows_squared, HW // num_windows_squared, C)
-            attention_output = attention_output.view(B * num_windows_squared, HW // num_windows_squared, C)
+            attention_output = attention_output.view(shortcut.shape)
 
         attention_output = self.layer_scale1(attention_output)
         outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
@@ -1085,25 +1102,35 @@ class WindowedDinov2WithRegistersBackbone(WindowedDinov2WithRegistersPreTrainedM
                     hidden_state = self.layernorm(hidden_state)
                 if self.config.reshape_hidden_states:
                     hidden_state = hidden_state[:, self.num_register_tokens + 1 :]
-                    # this was actually a bug in the original implementation that we copied here,
-                    # cause normally the order is height, width
-                    batch_size, _, height, width = pixel_values.shape
+                    batch_size = pixel_values.shape[0]
+                    height, width = pixel_values.shape[2:]
                     patch_size = self.config.patch_size
+                    
+                    adjusted_height = (height // (self.config.patch_size * self.config.num_windows)) * (self.config.patch_size * self.config.num_windows)
+                    adjusted_width = (width // (self.config.patch_size * self.config.num_windows)) * (self.config.patch_size * self.config.num_windows)
 
-                    num_h_patches = height // patch_size
-                    num_w_patches = width // patch_size
+                    num_h_patches = adjusted_height // patch_size
+                    num_w_patches = adjusted_width // patch_size
                     
                     if self.config.num_windows > 1:
                         # undo windowing
                         num_windows_squared = self.config.num_windows ** 2
                         B, HW, C = hidden_state.shape
+                        
+                        # Calculate num_h_patches_per_window and num_w_patches_per_window from HW
+                        # HW is the number of patches per window (including CLS token if present)
+                        # Assuming square patches within a window
+                        # num_patches_per_window = HW # This line is problematic, HW is already the number of patches per window
+                        
+                        # Recalculate num_h_patches_per_window and num_w_patches_per_window based on total patches and number of windows
                         num_h_patches_per_window = num_h_patches // self.config.num_windows
                         num_w_patches_per_window = num_w_patches // self.config.num_windows
-                        hidden_state = hidden_state.reshape(B // num_windows_squared, num_windows_squared * HW, C)
-                        hidden_state = hidden_state.view(B // num_windows_squared, self.config.num_windows, self.config.num_windows, num_h_patches_per_window, num_w_patches_per_window, C)
-                        hidden_state = hidden_state.permute(0, 1, 3, 2, 4, 5)
 
-                    hidden_state = hidden_state.reshape(batch_size, num_h_patches, num_w_patches, -1)
+                        hidden_state = hidden_state.reshape(B // num_windows_squared, num_windows_squared, num_h_patches_per_window, num_w_patches_per_window, C)
+                        hidden_state = hidden_state.permute(0, 1, 3, 2, 4)
+                        hidden_state = hidden_state.reshape(batch_size, num_h_patches, num_w_patches, C)
+                    else:
+                        hidden_state = hidden_state.reshape(batch_size, num_h_patches, num_w_patches, -1)
                     hidden_state = hidden_state.permute(0, 3, 1, 2).contiguous()
                 
                 feature_maps += (hidden_state,)
