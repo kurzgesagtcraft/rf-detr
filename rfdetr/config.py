@@ -24,7 +24,7 @@ class ModelConfig(BaseModel):
     lite_refpoint_refine: bool = True
     layer_norm: bool = True
     amp: bool = True
-    num_classes: int = 90
+    num_classes: int = 10
     pretrain_weights: Optional[str] = None
     device: Literal["cpu", "cuda", "mps"] = DEVICE
     resolution: int = 560

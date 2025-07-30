@@ -38,7 +38,7 @@ from rfdetr.util.misc import NestedTensor
 
 #结果可视化函数新增导入
 import os
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import torchvision.transforms.functional as F
 from rfdetr.util import box_ops
 import numpy as np
@@ -131,20 +131,11 @@ def train_one_epoch(
                 
                 # 新增的可视化步骤
                 # Save images periodically to check detection results
-                if representative_image_ids:
-                    for j in range(len(new_targets)):
-                        image_id = new_targets[j]['image_id'].item()
-                        # print(f"Checking image_id: {image_id}, is in representative: {image_id in representative_image_ids}, is already saved: {image_id in saved_representative_images_this_epoch}")
-                        if image_id in representative_image_ids and image_id not in saved_representative_images_this_epoch:
-                            try:
-                                print(f"Saving detection image for image_id: {image_id} in epoch {epoch}")
-                                single_output = {k: v[j:j+1] for k, v in outputs.items()}
-                                single_target = [new_targets[j]]
-                                single_sample = NestedTensor(new_samples.tensors[j:j+1], new_samples.mask[j:j+1])
-                                save_detection_images(single_output, single_target, single_sample, epoch, coco_dataset=coco_dataset, criterion=criterion)
-                                saved_representative_images_this_epoch.add(image_id)
-                            except Exception as e:
-                                print(f"Error saving detection image {image_id} in epoch {epoch}: {e}")
+                if epoch % 5 == 0 and data_iter_step % 100 == 0:
+                    try:
+                        save_detection_images(outputs, new_targets, new_samples, epoch, coco_dataset=coco_dataset, criterion=criterion)
+                    except Exception as e:
+                        print(f"Error saving detection image in epoch {epoch}: {e}")
 
                 loss_dict = criterion(outputs, new_targets)
                 weight_dict = criterion.weight_dict
@@ -195,6 +186,9 @@ def train_one_epoch(
             writer.add_scalar('train/loss', loss_value, it)
             writer.add_scalar('train/class_error', loss_dict_reduced["class_error"], it)
             writer.add_scalar('train/lr', optimizer.param_groups[0]["lr"], it)
+            # Log individual losses
+            for k, v in loss_dict_reduced_scaled.items():
+                writer.add_scalar(f'train/{k}', v, it)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -299,6 +293,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
         fps = 0
     
     print(f"FPS (batch_size=1): {fps:.2f}")
+    if writer and epoch is not None:
+        writer.add_scalar('eval/FPS', fps, epoch)
 
     stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
     stats['fps'] = fps
@@ -310,18 +306,24 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
             stats['mAP@.50'] = stats["coco_eval_bbox"][1]
 
     if writer and epoch is not None:
-        # Log main stats
-        for k, v in stats.items():
-            if isinstance(v, (int, float)) and k not in ['fps', 'mAP@.50-.95', 'mAP@.50', 'coco_eval_bbox']:
-                writer.add_scalar(f'eval/{k}', v, epoch)
+        writer.add_scalar('eval/loss', stats['loss'], epoch)
+        if 'class_error' in stats:
+            writer.add_scalar('eval/class_error', stats['class_error'], epoch)
         
-        # Log specific metrics for clarity in TensorBoard
         if 'mAP@.50-.95' in stats:
             writer.add_scalar('eval/mAP@.50-.95', stats['mAP@.50-.95'], epoch)
+        else:
+            print("Warning: 'mAP@.50-.95' not found in stats. Skipping TensorBoard log.")
+            
         if 'mAP@.50' in stats:
             writer.add_scalar('eval/mAP@.50', stats['mAP@.50'], epoch)
+        else:
+            print("Warning: 'mAP@.50' not found in stats. Skipping TensorBoard log.")
+
         if 'fps' in stats:
             writer.add_scalar('eval/FPS', stats['fps'], epoch)
+        else:
+            print("Warning: 'fps' not found in stats. Skipping TensorBoard log.")
 
     if coco_evaluator and "segm" in postprocessors.keys():
         stats["coco_eval_masks"] = coco_evaluator.coco_eval["segm"].stats.tolist()
@@ -350,11 +352,25 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
     # Load the original image from the visual dataset (which has GT boxes)
     original_image_path = os.path.join("dataset/visual/train", img_filename)
     if not os.path.exists(original_image_path):
-        print(f"Warning: Original image not found at {original_image_path}, skipping.")
-        return
-    
-    img = Image.open(original_image_path).convert('RGB')
+        # If not found, try to reconstruct from the tensor
+        print(f"Warning: Original image not found at {original_image_path}. Reconstructing from tensor.")
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+        
+        # Denormalize and convert to PIL image
+        denormalized_tensor = denormalize_image(samples.tensors[0].cpu(), mean, std)
+        img = F.to_pil_image(denormalized_tensor)
+    else:
+        img = Image.open(original_image_path).convert('RGB')
+
     draw = ImageDraw.Draw(img)
+
+    # Load font
+    try:
+        font = ImageFont.truetype("arial.ttf", 15)
+    except IOError:
+        print("Arial font not found. Falling back to default font.")
+        font = ImageFont.load_default()
 
     # Get original size for scaling boxes
     orig_size = target['orig_size']
@@ -388,16 +404,23 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
                 draw.rectangle(box, outline="red", width=2)
                 
                 text = f"{category_name} {score.item():.2f}"
-                text_position = (box[0] + 2, box[1] + 2)
+                text_position = (box[0], box[1] - 15 if box[1] - 15 > 0 else box[1])
                 
                 try:
-                    text_bbox = draw.textbbox(text_position, text)
-                    draw.rectangle(text_bbox, fill="red")
-                    draw.text(text_position, text, fill='white')
-                except AttributeError:  # Fallback for older Pillow versions
-                    text_size = draw.textsize(text)
-                    draw.rectangle([text_position[0], text_position[1], text_position[0] + text_size[0], text_position[1] + text_size[1]], fill="red")
-                    draw.text(text_position, text, fill='white')
+                    # Use textbbox for modern Pillow versions
+                    text_bbox = draw.textbbox(text_position, text, font=font)
+                    # Adjust bbox to add some padding
+                    padded_bbox = (text_bbox[0]-2, text_bbox[1]-2, text_bbox[2]+2, text_bbox[3]+2)
+                    draw.rectangle(padded_bbox, fill="red")
+                    draw.text(text_position, text, fill="white", font=font)
+                except AttributeError:
+                    # Fallback for older Pillow versions
+                    text_size = draw.textsize(text, font=font)
+                    draw.rectangle(
+                        (text_position[0], text_position[1], text_position[0] + text_size[0], text_position[1] + text_size[1]),
+                        fill="red"
+                    )
+                    draw.text(text_position, text, fill='white', font=font)
     else:
         print("Warning: `criterion` not provided to `save_detection_images`. Cannot determine which boxes are used for loss. Skipping image save.")
         return
