@@ -183,3 +183,4 @@ runs/
 # Output directories
 output/
 logs/
+autologger.py

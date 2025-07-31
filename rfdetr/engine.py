@@ -41,6 +41,7 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 import torchvision.transforms.functional as F
 from rfdetr.util import box_ops
+from rfdetr.util.coco_classes import COCO_CLASSES
 import numpy as np
 
 def get_autocast_args(args):
@@ -285,7 +286,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
         coco_evaluator.accumulate()
         coco_evaluator.summarize()
 
-    # Calculate FPS
+    # Calculate FPS - 移除重复计算
     if forward_pass_times:
         avg_forward_time = np.mean(forward_pass_times)
         fps = 1 / avg_forward_time
@@ -293,8 +294,33 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
         fps = 0
     
     print(f"FPS (batch_size=1): {fps:.2f}")
-    if writer and epoch is not None:
-        writer.add_scalar('eval/FPS', fps, epoch)
+    
+    # 确保FPS被正确记录到stats中
+    stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    stats['fps'] = fps
+    
+    # 确保mAP值被正确提取和记录
+    if coco_evaluator is not None:
+        if "bbox" in postprocessors.keys():
+            coco_stats = coco_evaluator.coco_eval["bbox"].stats.tolist()
+            stats["coco_eval_bbox"] = coco_stats
+            
+            # 确保mAP值存在
+            if len(coco_stats) >= 12:  # COCO评估有12个指标
+                stats['mAP@.50-.95'] = float(coco_stats[0])
+                stats['mAP@.50'] = float(coco_stats[1])
+                stats['mAP@.75'] = float(coco_stats[2])
+                stats['mAP_small'] = float(coco_stats[3])
+                stats['mAP_medium'] = float(coco_stats[4])
+                stats['mAP_large'] = float(coco_stats[5])
+                print(f"mAP@.50-.95: {stats['mAP@.50-.95']:.4f}")
+                print(f"mAP@.50: {stats['mAP@.50']:.4f}")
+                print(f"mAP@.75: {stats['mAP@.75']:.4f}")
+            else:
+                print("Warning: coco_eval_bbox stats list is incomplete")
+                # 至少设置基本的mAP值
+                stats['mAP@.50-.95'] = float(coco_stats[0]) if len(coco_stats) > 0 else 0.0
+                stats['mAP@.50'] = float(coco_stats[1]) if len(coco_stats) > 1 else 0.0
 
     stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
     stats['fps'] = fps
@@ -302,28 +328,54 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
     if coco_evaluator is not None:
         if "bbox" in postprocessors.keys():
             stats["coco_eval_bbox"] = coco_evaluator.coco_eval["bbox"].stats.tolist()
-            stats['mAP@.50-.95'] = stats["coco_eval_bbox"][0]
-            stats['mAP@.50'] = stats["coco_eval_bbox"][1]
+            # Ensure mAP values are properly extracted
+            if len(stats["coco_eval_bbox"]) > 1:
+                stats['mAP@.50-.95'] = stats["coco_eval_bbox"][0]
+                stats['mAP@.50'] = stats["coco_eval_bbox"][1]
+                print(f"mAP@.50-.95: {stats['mAP@.50-.95']:.4f}")
+                print(f"mAP@.50: {stats['mAP@.50']:.4f}")
+            else:
+                print("Warning: coco_eval_bbox stats list is too short.")
 
     if writer and epoch is not None:
+        # 确保所有重要指标都被记录到TensorBoard
+        print(f"Logging metrics to TensorBoard for epoch {epoch}")
+        
+        # 基本指标
         writer.add_scalar('eval/loss', stats['loss'], epoch)
         if 'class_error' in stats:
             writer.add_scalar('eval/class_error', stats['class_error'], epoch)
         
-        if 'mAP@.50-.95' in stats:
-            writer.add_scalar('eval/mAP@.50-.95', stats['mAP@.50-.95'], epoch)
-        else:
-            print("Warning: 'mAP@.50-.95' not found in stats. Skipping TensorBoard log.")
-            
-        if 'mAP@.50' in stats:
-            writer.add_scalar('eval/mAP@.50', stats['mAP@.50'], epoch)
-        else:
-            print("Warning: 'mAP@.50' not found in stats. Skipping TensorBoard log.")
-
-        if 'fps' in stats:
-            writer.add_scalar('eval/FPS', stats['fps'], epoch)
-        else:
-            print("Warning: 'fps' not found in stats. Skipping TensorBoard log.")
+        # FPS指标 - 确保记录
+        fps_value = stats.get('fps', 0.0)
+        writer.add_scalar('eval/FPS', fps_value, epoch)
+        print(f"Logged FPS to TensorBoard: {fps_value:.2f}")
+        
+        # mAP指标 - 确保记录
+        map_5095 = stats.get('mAP@.50-.95', 0.0)
+        map_50 = stats.get('mAP@.50', 0.0)
+        map_75 = stats.get('mAP@.75', 0.0)
+        
+        writer.add_scalar('eval/mAP@.50-.95', map_5095, epoch)
+        writer.add_scalar('eval/mAP@.50', map_50, epoch)
+        writer.add_scalar('eval/mAP@.75', map_75, epoch)
+        
+        print(f"Logged mAP metrics to TensorBoard:")
+        print(f"  mAP@.50-.95: {map_5095:.4f}")
+        print(f"  mAP@.50: {map_50:.4f}")
+        print(f"  mAP@.75: {map_75:.4f}")
+        
+        # 额外的mAP细分指标
+        if 'mAP_small' in stats:
+            writer.add_scalar('eval/mAP_small', stats['mAP_small'], epoch)
+        if 'mAP_medium' in stats:
+            writer.add_scalar('eval/mAP_medium', stats['mAP_medium'], epoch)
+        if 'mAP_large' in stats:
+            writer.add_scalar('eval/mAP_large', stats['mAP_large'], epoch)
+        
+        # 强制刷新确保写入
+        writer.flush()
+        print("TensorBoard logs flushed successfully")
 
     if coco_evaluator and "segm" in postprocessors.keys():
         stats["coco_eval_masks"] = coco_evaluator.coco_eval["segm"].stats.tolist()
@@ -365,12 +417,37 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
 
     draw = ImageDraw.Draw(img)
 
-    # Load font
-    try:
-        font = ImageFont.truetype("arial.ttf", 15)
-    except IOError:
-        print("Arial font not found. Falling back to default font.")
-        font = ImageFont.load_default()
+    # Load font with multiple fallback options and better error处理
+    font_paths = [
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/simhei.ttf",  # 黑体
+        "C:/Windows/Fonts/msyh.ttc",    # 微软雅黑
+        "C:/Windows/Fonts/tahoma.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
+        "/System/Library/Fonts/Helvetica.ttc",  # macOS
+    ]
+    font_size = 20  # 适中的字体大小
+    font = None
+    
+    for font_path in font_paths:
+        try:
+            if os.path.exists(font_path):
+                font = ImageFont.truetype(font_path, font_size)
+                print(f"Successfully loaded font from {font_path}")
+                break
+        except (IOError, OSError) as e:
+            print(f"Warning: Font not found at {font_path}: {e}")
+    
+    if font is None:
+        print("Warning: No truetype font found. Using default font with larger size.")
+        try:
+            # 尝试使用Pillow的默认字体，但增大尺寸
+            font = ImageFont.load_default()
+            font_size = 16
+        except:
+            # 最后的备选方案
+            font = ImageFont.load_default()
+            font_size = 12
 
     # Get original size for scaling boxes
     orig_size = target['orig_size']
@@ -381,6 +458,9 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
     img_output_dir = os.path.join(output_dir, img_name_without_ext)
     os.makedirs(img_output_dir, exist_ok=True)
     print(f"Saving image to directory: {img_output_dir}")
+
+    # Count of drawn boxes for debugging
+    drawn_boxes = 0
 
     if criterion:
         # Use matcher to find corresponding predicted boxes
@@ -396,31 +476,120 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
             scaled_pred_boxes = box_ops.box_cxcywh_to_xyxy(pred_boxes)
             scaled_pred_boxes = scaled_pred_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_pred_boxes.device)
             
+            # 改进的类别名称获取逻辑 - 使用COCO_CLASSES
+            category_mapping = {}
+            try:
+                # 从coco_dataset获取类别映射
+                if coco_dataset and hasattr(coco_dataset, 'cats'):
+                    for cat_id, cat_info in coco_dataset.cats.items():
+                        category_mapping[cat_id] = cat_info['name']
+                    print(f"从coco_dataset获取类别: {category_mapping}")
+                
+                # 如果coco_dataset没有类别信息，使用COCO_CLASSES
+                if not category_mapping:
+                    category_mapping = COCO_CLASSES
+                    print(f"使用COCO_CLASSES映射: {len(category_mapping)}个类别")
+                
+            except Exception as e:
+                print(f"获取类别映射时出错: {e}, 使用COCO_CLASSES回退方案")
+                category_mapping = COCO_CLASSES
+            
+            # 过滤低置信度预测
+            confidence_threshold = 0.3
+            
             for box, label, score in zip(scaled_pred_boxes, labels, scores):
+                score_value = score.item()
+                if score_value < confidence_threshold:
+                    continue
+                    
                 box = box.cpu().tolist()
                 category_id = label.item()
-                category_name = coco_dataset.cats[category_id]['name'] if category_id in coco_dataset.cats else f"ID:{category_id}"
                 
-                draw.rectangle(box, outline="red", width=2)
+                # 获取类别名称 - 模型输出包含背景类别(0)，但COCO_CLASSES从1开始
+                # 如果类别ID为0，表示背景，不显示
+                # 如果类别ID大于COCO_CLASSES的最大ID，尝试减去1（因为模型可能使用了num_classes+1）
+                if category_id == 0:
+                    continue  # 跳过背景类别
+                elif category_id not in category_mapping and category_id - 1 in category_mapping:
+                    adjusted_category_id = category_id - 1
+                    category_name = category_mapping.get(adjusted_category_id, f"Class_{adjusted_category_id}")
+                    print(f"调整类别ID: {category_id} -> {adjusted_category_id}, 类别名称: {category_name}")
+                else:
+                    category_name = category_mapping.get(category_id, f"Class_{category_id}")
                 
-                text = f"{category_name} {score.item():.2f}"
-                text_position = (box[0], box[1] - 15 if box[1] - 15 > 0 else box[1])
+                # 调试输出
+                print(f"类别ID: {category_id}, 映射名称: {category_name}")
                 
+                # 确保box坐标在图像范围内
+                box = [
+                    max(0, min(box[0], img_w)),
+                    max(0, min(box[1], img_h)),
+                    max(0, min(box[2], img_w)),
+                    max(0, min(box[3], img_h))
+                ]
+                
+                # 绘制边界框
+                draw.rectangle(box, outline="red", width=3)
+                
+                # 准备文本
+                text = f"{category_name}: {score_value:.2f}"
+                
+                # 计算文本位置 - 确保在图像内
+                text_x = max(2, min(box[0] + 2, img_w - 100))
+                text_y = max(2, box[1] - font_size - 2)
+                
+                # 如果文本会超出上边界，放在框内
+                if text_y < 2:
+                    text_y = max(2, box[1] + 2)
+                
+                text_position = (text_x, text_y)
+                
+                # 绘制带背景的文本
                 try:
-                    # Use textbbox for modern Pillow versions
-                    text_bbox = draw.textbbox(text_position, text, font=font)
-                    # Adjust bbox to add some padding
-                    padded_bbox = (text_bbox[0]-2, text_bbox[1]-2, text_bbox[2]+2, text_bbox[3]+2)
-                    draw.rectangle(padded_bbox, fill="red")
+                    # 获取文本边界框
+                    if hasattr(draw, 'textbbox'):
+                        text_bbox = draw.textbbox(text_position, text, font=font)
+                        text_width = text_bbox[2] - text_bbox[0]
+                        text_height = text_bbox[3] - text_bbox[1]
+                    else:
+                        # 旧版本Pillow的备选方案
+                        text_width = len(text) * font_size * 0.6
+                        text_height = font_size
+                        text_bbox = (text_position[0], text_position[1],
+                                   text_position[0] + text_width, text_position[1] + text_height)
+                    
+                    # 调整背景框大小
+                    padding = 2
+                    bg_box = [
+                        text_bbox[0] - padding,
+                        text_bbox[1] - padding,
+                        text_bbox[2] + padding,
+                        text_bbox[3] + padding
+                    ]
+                    
+                    # 确保背景框在图像内
+                    bg_box[0] = max(0, bg_box[0])
+                    bg_box[1] = max(0, bg_box[1])
+                    bg_box[2] = min(img_w, bg_box[2])
+                    bg_box[3] = min(img_h, bg_box[3])
+                    
+                    # 绘制背景
+                    draw.rectangle(bg_box, fill="red")
+                    
+                    # 绘制文本
                     draw.text(text_position, text, fill="white", font=font)
-                except AttributeError:
-                    # Fallback for older Pillow versions
-                    text_size = draw.textsize(text, font=font)
-                    draw.rectangle(
-                        (text_position[0], text_position[1], text_position[0] + text_size[0], text_position[1] + text_size[1]),
-                        fill="red"
-                    )
-                    draw.text(text_position, text, fill='white', font=font)
+                    drawn_boxes += 1
+                    
+                except Exception as e:
+                    print(f"Error drawing text for {category_name}: {e}")
+                    # 最后的备选：直接绘制文本
+                    try:
+                        draw.text(text_position, text, fill="red", font=font)
+                        drawn_boxes += 1
+                    except:
+                        pass
+        else:
+            print("No predicted boxes to draw.")
     else:
         print("Warning: `criterion` not provided to `save_detection_images`. Cannot determine which boxes are used for loss. Skipping image save.")
         return
@@ -428,3 +597,5 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
     # Save the modified image
     save_path = os.path.join(img_output_dir, f"epoch_{epoch}.png")
     img.save(save_path)
+    print(f"Image saved to {save_path} with {drawn_boxes} labeled boxes")
+    sys.stdout.flush()  # Ensure immediate output

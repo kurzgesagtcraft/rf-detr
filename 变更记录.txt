@@ -1,0 +1,1938 @@
+变更记录
+1.注释rfdetr\cli\main.py的trainer函数与Roboflow工作区相关的无用代码
+2.rfdetr\config.py的TrainConfig类dataset_file改为"coco"
+3.rfdetr\config.py的TrainConfig类dataset_dir改为"./dataset",pretrain_weights改为"./pretrain_weights/rf-detr-base-coco.pth"
+4.创建dataset\train\_annotations.coco.json与dataset\train\example.json文件
+5.rfdetr\main.py文件的get_args_parser函数的'--dataset_dir'设置default='./dataset',
+'--pretrain_weights'default='./pretrain_weights/rf-detr-base-coco.pth',
+'--encoder', default='vit_tiny'改为default='dinov2_windowed_registers_small'
+dinov2预训练权重对源码模型结构适配
+class Model:
+    def __init__
+169行添加for key in list(checkpoint['model'].keys()):
+                if 'backbone.0.projector' in key:
+                    del checkpoint['model'][key]
+
+6.修复了 `if __name__ == '__main__'` 中直接调用不存在的 `main` 函数的错误，改为实例化 `Model` 并调用 `train` 方法。
+7.在 `rfdetr/engine.py` 中添加了 `save_detection_images` 函数，用于在训练过程中将检测结果可视化并保存到 `./result` 目录。
+#结果可视化函数新增导入
+import os
+from PIL import Image, ImageDraw
+import torchvision.transforms.functional as F
+from rfdetr.util import box_ops
+import numpy as np
+#新增的可视化函数
+def denormalize_image(tensor, mean, std):
+    """Denormalizes a tensor image with mean and standard deviation."""
+    tensor = tensor.clone()
+    mean = torch.as_tensor(mean, dtype=tensor.dtype, device=tensor.device).view(-1, 1, 1)
+    std = torch.as_tensor(std, dtype=tensor.dtype, device=tensor.device).view(-1, 1, 1)
+    tensor.mul_(std).add_(mean)
+    return tensor
+
+def save_detection_images(outputs, targets, samples, epoch, step, sub_step, output_dir="./result", threshold=0.5):
+    """
+    Saves images with predicted bounding boxes.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Get predictions
+    pred_logits = outputs['pred_logits'].softmax(-1)
+    pred_boxes = outputs['pred_boxes']
+    
+    # Denormalize images for saving
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+
+    for i in range(len(targets)):
+        # Get image
+        img_tensor = samples.tensors[i]
+        img_tensor_denorm = denormalize_image(img_tensor, mean, std)
+        img = F.to_pil_image(img_tensor_denorm.cpu())
+        draw = ImageDraw.Draw(img)
+
+        # Get original size and scale boxes
+        orig_size = targets[i]['orig_size']
+        img_w, img_h = orig_size.cpu().numpy()
+        
+        # Filter predictions by threshold
+        scores, labels = pred_logits[i].max(-1)
+        keep = scores > threshold
+        
+        boxes_to_draw = pred_boxes[i][keep]
+        labels_to_draw = labels[keep]
+        scores_to_draw = scores[keep]
+
+        if boxes_to_draw.shape[0] == 0:
+            continue
+
+        # Convert boxes from [cx, cy, w, h] to [x1, y1, x2, y2] and scale
+        scaled_boxes = box_ops.box_cxcywh_to_xyxy(boxes_to_draw)
+        scaled_boxes = scaled_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_boxes.device)
+
+        # Draw boxes
+        for box, label, score in zip(scaled_boxes, labels_to_draw, scores_to_draw):
+            box = box.cpu().tolist()
+            draw.rectangle(box, outline="red", width=2)
+            draw.text((box[0] + 2, box[1] + 2), f"L:{label.item()} S:{score.item():.2f}", fill="red")
+
+        # Save image
+        image_id = targets[i]['image_id'].item()
+        save_path = os.path.join(output_dir, f"epoch{epoch}_step{step}_{sub_step}_img{image_id}.png")
+        img.save(save_path)
+
+8.将当前文件路径添加到python系统路径靠前防止导入其它项目的文件
+9.在rfdetr\models\backbone\backbone.py文件Backbone类__init__方法中添加非窗口注意力强制下载预训练权重模型
+添加if 'large' in name:
+            num_layers = 24
+        else:
+            num_layers = 12
+        
+        processed_out_feature_indexes = out_feature_indexes
+        if out_feature_indexes == [-1]:
+            processed_out_feature_indexes = [num_layers - 1]
+修改out_feature_indexes=out_feature_indexes,为out_feature_indexes=processed_out_feature_indexes,
+10.rfdetr\models\backbone\dinov2_configs\dinov2_with_registers_base.json文件移除了"out_features": [
+        "stage12"
+    ],
+    "out_indices": [
+        12
+    ],
+    防止与定义的'--out_feature_indexes', default=[-1]改为default=[2, 5, 8, 11]冲突
+11.创建rfdetr\models\backbone\dinov2_configs\dinov2_with_registers_small.json
+12.rfdetr\models\backbone\dinov2.py文件74-77行
+dino_config["out_features"] = [f"stage{i}" for i in out_feature_indexes]
+改为processed_out_feature_indexes = out_feature_indexes
+            if out_feature_indexes == [-1]:
+                processed_out_feature_indexes = [11]
+            dino_config["out_features"] = [f"stage{i+1}" for i in processed_out_feature_indexes]
+13.rfdetr\datasets\coco.py文件def build(image_set, args, resolution):
+    root = Path(args.coco_path)
+    改为def build(image_set, args, resolution):
+    root = Path(args.dataset_dir)
+14.修改 rfdetr/datasets/transforms.py 中的 resize 函数
+129行if target is None:
+        return rescaled_image, None
+改为# Calculate padding to make dimensions divisible by 14
+    w, h = rescaled_image.size
+    pad_w = (14 - (w % 14)) % 14
+    pad_h = (14 - (h % 14)) % 14
+    padded_image = F.pad(rescaled_image, (0, 0, pad_w, pad_h))
+
+    if target is None:
+        return padded_image, None
+
+148行 h, w = size
+    target["size"] = torch.tensor([h, w])
+
+    if "masks" in target:
+        target['masks'] = interpolate(
+            target['masks'][:, None].float(), size, mode="nearest")[:, 0] > 0.5
+    
+
+    return rescaled_image, target
+改为
+# Update target size to padded image size
+    target["size"] = torch.tensor([h + pad_h, w + pad_w])
+
+    if "masks" in target:
+        target['masks'] = interpolate(
+            target['masks'][:, None].float(), (h + pad_h, w + pad_w), mode="nearest")[:, 0] > 0.5
+    
+    return padded_image, target
+
+SquareResize 类__call__函数，
+234行rescaled_img=F.resize(img, (size, size))
+        w, h = rescaled_img.size
+        if target is None:
+            return rescaled_img, None
+改为rescaled_img = F.resize(img, (size, size))
+
+        # Calculate padding to make dimensions divisible by 14
+        w, h = rescaled_img.size
+        pad_w = (14 - (w % 14)) % 14
+        pad_h = (14 - (h % 14)) % 14
+        padded_image = F.pad(rescaled_img, (0, 0, pad_w, pad_h))
+
+        if target is None:
+            return padded_image, None
+
+254行target["size"] = torch.tensor([h, w])
+
+        return rescaled_img, target
+改为# Update target size to padded image size
+        target["size"] = torch.tensor([h + pad_h, w + pad_w])
+
+        return padded_image, target
+以确保图像尺寸能够被 14 整除。
+15.rfdetr\models\backbone\dinov2_with_windowed_attn.py文件WindowedDinov2WithRegistersEmbeddings类forward函数
+291行插入# Ensure height and width are divisible by patch_size * num_windows
+        adjusted_height = (height // (self.config.patch_size * self.config.num_windows)) * (self.config.patch_size * self.config.num_windows)
+        adjusted_width = (width // (self.config.patch_size * self.config.num_windows)) * (self.config.patch_size * self.config.num_windows)
+
+        # Resize pixel_values to adjusted_height, adjusted_width before patch embedding
+        if adjusted_height != height or adjusted_width != width:
+            pixel_values = F.resize(pixel_values, (adjusted_height, adjusted_width))
+            batch_size, _, height, width = pixel_values.shape # Update height and width
+
+315行 windowed_pixel_tokens = pixel_tokens_with_pos_embed.view(batch_size, num_windows, num_h_patches_per_window, num_windows, num_h_patches_per_window, -1)
+改为windowed_pixel_tokens = pixel_tokens_with_pos_embed.view(batch_size, num_windows, num_h_patches_per_window, num_windows, num_w_patches_per_window, -1)
+
+1101行batch_size, _, height, width = pixel_values.shape
+                    patch_size = self.config.patch_size
+改为
+# Get the actual height and width from the hidden_state (after removing CLS and register tokens)
+                    # hidden_state shape: (batch_size, num_patches, hidden_size)
+                    batch_size, num_patches, hidden_size = hidden_state.shape
+                    patch_size = self.config.patch_size
+                    
+                    # Calculate height and width based on num_patches and patch_size
+                    # Assuming square patches and original image was square or close to square
+                    # This might need adjustment if aspect ratio is highly variable
+                    height = int(math.sqrt(num_patches)) * patch_size
+                    width = int(math.sqrt(num_patches)) * patch_size
+
+16.rfdetr\models\backbone\dinov2_with_windowed_attn.py文件WindowedDinov2WithRegistersBackbone类forward函数
+1119行num_h_patches_per_window = num_h_patches // self.config.num_windows
+                        num_w_patches_per_window = num_w_patches // self.config.num_windows
+                        hidden_state = hidden_state.reshape(B // num_windows_squared, num_windows_squared * HW, C)
+                        hidden_state = hidden_state.view(B // num_windows_squared, self.config.num_windows, self.config.num_windows, num_h_patches_per_window, num_w_patches_per_window, C)
+                        hidden_state = hidden_state.permute(0, 1, 3, 2, 4, 5)
+
+                    hidden_state = hidden_state.reshape(batch_size, num_h_patches, num_w_patches, -1)
+改为# Calculate num_h_patches_per_window and num_w_patches_per_window from HW
+                        # HW is the number of patches per window (including CLS token if present)
+                        # Assuming square patches within a window
+                        # num_patches_per_window = HW # This line is problematic, HW is already the number of patches per window
+                        
+                        # Recalculate num_h_patches_per_window and num_w_patches_per_window based on total patches and number of windows
+                        num_h_patches_per_window = num_h_patches // self.config.num_windows
+                        num_w_patches_per_window = num_w_patches // self.config.num_windows
+
+                        hidden_state = hidden_state.reshape(B // num_windows_squared, num_windows_squared, num_h_patches_per_window, num_w_patches_per_window, C)
+                        hidden_state = hidden_state.permute(0, 1, 3, 2, 4)
+                        hidden_state = hidden_state.reshape(batch_size, num_h_patches, num_w_patches, C)
+                    else:
+                        hidden_state = hidden_state.reshape(batch_size, num_h_patches, num_w_patches, -1)
+
+然后
+1105行# this was actually a bug in the original implementation that we copied here,
+                    # cause normally the order is height, width
+                    # Get the actual height and width from the hidden_state (after removing CLS and register tokens)
+                    # hidden_state shape: (batch_size, num_patches, hidden_size)
+                    batch_size, num_patches, hidden_size = hidden_state.shape
+                    patch_size = self.config.patch_size
+                    
+                    # Calculate height and width based on num_patches and patch_size
+                    # Assuming square patches and original image was square or close to square
+                    # This might need adjustment if aspect ratio is highly variable
+                    height = int(math.sqrt(num_patches)) * patch_size
+                    width = int(math.sqrt(num_patches)) * patch_size
+
+                    num_h_patches = height // patch_size
+                    num_w_patches = width // patch_size
+改为
+batch_size = pixel_values.shape[0]
+                    height, width = pixel_values.shape[2:]
+                    patch_size = self.config.patch_size
+                    
+                    adjusted_height = (height // (self.config.patch_size * self.config.num_windows)) * (self.config.patch_size * self.config.num_windows)
+                    adjusted_width = (width // (self.config.patch_size * self.config.num_windows)) * (self.config.patch_size * self.config.num_windows)
+
+                    num_h_patches = adjusted_height // patch_size
+                    num_w_patches = adjusted_width // patch_size
+
+17.rfdetr\models\backbone\dinov2_with_windowed_attn.py文件WindowedDinov2WithRegistersLayer类forward函数
+628行hidden_states = hidden_states.view(B // num_windows_squared, num_windows_squared * HW, C)
+
+        self_attention_outputs = self.attention(
+            self.norm1(hidden_states),  # in Dinov2WithRegisters, layernorm is applied before self-attention
+            head_mask,
+            output_attentions=output_attentions,
+        )
+        attention_output = self_attention_outputs[0]
+
+        if run_full_attention:
+            # reshape x to add windows back
+            B, HW, C = hidden_states.shape
+            num_windows_squared = self.num_windows ** 2
+            # hidden_states = hidden_states.view(B * num_windows_squared, HW // num_windows_squared, C)
+            attention_output = attention_output.view(B * num_windows_squared, HW // num_windows_squared, C)
+改为
+# Calculate the number of patches per window (excluding CLS and register tokens)
+            # HW is 1 (CLS) + num_register_tokens + num_patches_per_window
+            num_patches_per_window_actual = HW - 1 - self.config.num_register_tokens
+            
+            # Calculate the total number of tokens (including CLS and register tokens)
+            total_tokens = (1 + self.config.num_register_tokens + num_patches_per_window_actual) * num_windows_squared
+            
+            # Reshape to original batch size and total tokens (including CLS and register tokens)
+            hidden_states = hidden_states.view(B // num_windows_squared, total_tokens, C)
+
+        self_attention_outputs = self.attention(
+            self.norm1(hidden_states),  # in Dinov2WithRegisters, layernorm is applied before self-attention
+            head_mask,
+            output_attentions=output_attentions,
+        )
+        attention_output = self_attention_outputs[0]
+
+        if run_full_attention:
+            attention_output = attention_output.view(shortcut.shape)
+
+18.在rfdetr\models\backbone\dinov2_with_windowed_attn.py文件 WindowedDinov2WithRegistersLayer类 的 __init__ 方法中添加 self.config = config。
+
+19.rfdetr\main.py文件
+添加from torch.utils.tensorboard import SummaryWriter
+class Model:
+def train(self, callbacks: DefaultDict[str, List[Callable]], **kwargs):
+改为
+def train(self, callbacks: DefaultDict[str, List[Callable]], writer=None, **kwargs):
+624行effective_batch_size, args.clip_max_norm, ema_m=self.ema_m, schedules=schedules, 
+                num_training_steps_per_epoch=num_training_steps_per_epoch,
+                vit_encoder_num_layers=args.vit_encoder_num_layers, args=args, callbacks=callbacks)
+改为
+effective_batch_size, args.clip_max_norm, ema_m=self.ema_m, schedules=schedules,
+                num_training_steps_per_epoch=num_training_steps_per_epoch,
+                vit_encoder_num_layers=args.vit_encoder_num_layers, args=args, callbacks=callbacks, writer=writer)
+677行self.ema_m.module, criterion, postprocessors, data_loader_val, base_ds, device, args=args
+改为self.ema_m.module, criterion, postprocessors, data_loader_val, base_ds, device, args=args, writer=writer, epoch=epoch
+
+1260行model = Model(**config)
+        model.train(callbacks=DefaultDict(list), **config)
+改为writer = SummaryWriter('runs')
+        model = Model(**config)
+        model.train(callbacks=DefaultDict(list), writer=writer, **config)
+        writer.close()
+
+20.rfdetr\engine.py文件
+添加import time
+
+train_one_epoch方法添加writer=None,参数
+211行添加
+# For FPS calculation
+forward_pass_times = []
+223行
+            outputs = model(samples)
+改为
+            start_time = time.time()
+            outputs = model(samples)
+            end_time = time.time()
+            # We only measure forward pass time for batch size 1 for a realistic FPS measurement
+            if samples.tensors.shape[0] == 1:
+                forward_pass_times.append(end_time - start_time)
+
+284行
+stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    if writer:
+        for k, v in stats.items():
+            if isinstance(v, (int, float)):
+                writer.add_scalar(f'eval/{k}', v, epoch)
+    if coco_evaluator is not None:
+        if "bbox" in postprocessors.keys():
+            stats["coco_eval_bbox"] = coco_evaluator.coco_eval["bbox"].stats.tolist()
+            if writer:
+                for i, stat in enumerate(coco_evaluator.coco_eval["bbox"].stats):
+                    writer.add_scalar(f'eval/bbox_stat_{i}', stat, epoch)
+改为
+# Calculate FPS
+    if forward_pass_times:
+        avg_forward_time = np.mean(forward_pass_times)
+        fps = 1 / avg_forward_time
+    else:
+        fps = 0
+    
+    print(f"FPS (batch_size=1): {fps:.2f}")
+
+    stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    stats['fps'] = fps
+
+    if coco_evaluator is not None:
+        if "bbox" in postprocessors.keys():
+            stats["coco_eval_bbox"] = coco_evaluator.coco_eval["bbox"].stats.tolist()
+            map_50_95 = coco_evaluator.coco_eval['bbox'].stats[0]
+            map_50 = coco_evaluator.coco_eval['bbox'].stats[1]
+            stats['mAP@.50-.95'] = map_50_95
+            stats['mAP@.50'] = map_50
+            print(f"mAP@.50-.95: {map_50_95:.4f}")
+            print(f"mAP@.50: {map_50:.4f}")
+
+    if writer:
+        for k, v in stats.items():
+            if isinstance(v, (int, float)):
+                writer.add_scalar(f'eval/{k}', v, epoch)
+        if 'mAP@.50-.95' in stats:
+            writer.add_scalar('eval/mAP_50-95', stats['mAP@.50-.95'], epoch)
+            writer.add_scalar('eval/mAP_50', stats['mAP@.50'], epoch)
+            writer.add_scalar('eval/FPS', stats['fps'], epoch)
+
+
+
+180行添加if writer:
+            writer.add_scalar('train/loss', loss_value, it)
+            writer.add_scalar('train/class_error', loss_dict_reduced["class_error"], it)
+            writer.add_scalar('train/lr', optimizer.param_groups[0]["lr"], it)
+191行def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, args=None):
+改为def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, args=None):
+
+271行添加if writer:
+        for k, v in stats.items():
+            if isinstance(v, (int, float)):
+                writer.add_scalar(f'eval/{k}', v, epoch)
+278行添加if writer:
+                for i, stat in enumerate(coco_evaluator.coco_eval["bbox"].stats):
+                    writer.add_scalar(f'eval/bbox_stat_{i}', stat, epoch)
+
+21.rfdetr\main.py的train方法中
+535行添加# Select 100 representative images for visualization
+        image_ids = list(dataset_train.coco.imgs.keys())
+        if len(image_ids) > 100:
+            # Use a fixed seed for reproducibility of selected images
+            random.seed(args.seed)
+            representative_image_ids = random.sample(image_ids, 100)
+        else:
+            representative_image_ids = image_ids
+        # convert to a set for faster lookup
+        representative_image_ids = set(representative_image_ids)
+691行
+ vit_encoder_num_layers=args.vit_encoder_num_layers, args=args, callbacks=callbacks, writer=writer)
+ 改为
+ vit_encoder_num_layers=args.vit_encoder_num_layers, args=args, callbacks=callbacks, writer=writer,
+                representative_image_ids=representative_image_ids,
+                coco_dataset=dataset_train.coco)
+22.rfdetr\engine.py文件train_one_epoch方法添加representative_image_ids=None,coco_dataset=None,参数
+133行save_detection_images(outputs, new_targets, new_samples, epoch, data_iter_step, i)
+改为image_id = new_targets[0]['image_id'].item()
+    if representative_image_ids and image_id in representative_image_ids:
+        save_detection_images(outputs, new_targets, new_samples, epoch, data_iter_step, i, coco_dataset=coco_dataset)
+
+最后函数改为
+def save_detection_images(outputs, targets, samples, epoch, step, sub_step, output_dir="./result", threshold=0.5, coco_dataset=None):
+    """
+    Saves images with predicted and ground truth bounding boxes.
+    """
+    # Get predictions
+    pred_logits = outputs['pred_logits'].softmax(-1)
+    pred_boxes = outputs['pred_boxes']
+    
+    # Denormalize images for saving
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+
+    for i in range(len(targets)):
+        image_id = targets[i]['image_id'].item()
+        
+        # Get original image filename
+        img_info = coco_dataset.loadImgs(image_id)[0]
+        img_filename = img_info['file_name']
+        img_name_without_ext = os.path.splitext(img_filename)[0]
+
+        # Create a directory for the image if it doesn't exist
+        img_output_dir = os.path.join(output_dir, img_name_without_ext)
+        os.makedirs(img_output_dir, exist_ok=True)
+
+        # Get image
+        img_tensor = samples.tensors[i]
+        img_tensor_denorm = denormalize_image(img_tensor, mean, std)
+        img = F.to_pil_image(img_tensor_denorm.cpu())
+        draw = ImageDraw.Draw(img)
+
+        # Get original size and scale boxes
+        orig_size = targets[i]['orig_size']
+        img_h, img_w = orig_size.cpu().numpy()
+        
+        # --- Draw Ground Truth Boxes (Green) ---
+        gt_boxes = targets[i]['boxes']
+        gt_labels = targets[i]['labels']
+        
+        # Convert GT boxes from [cx, cy, w, h] to [x1, y1, x2, y2] and scale
+        scaled_gt_boxes = box_ops.box_cxcywh_to_xyxy(gt_boxes)
+        scaled_gt_boxes = scaled_gt_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_gt_boxes.device)
+
+        for box, label in zip(scaled_gt_boxes, gt_labels):
+            box = box.cpu().tolist()
+            draw.rectangle(box, outline="lime", width=2)
+            draw.text((box[0] + 2, box[1] - 12), f"GT_L:{label.item()}", fill="lime")
+
+        # --- Draw Predicted Boxes (Red) ---
+        scores, labels = pred_logits[i].max(-1)
+        keep = scores > threshold
+        
+        boxes_to_draw = pred_boxes[i][keep]
+        labels_to_draw = labels[keep]
+        scores_to_draw = scores[keep]
+
+        if boxes_to_draw.shape[0] > 0:
+            # Convert boxes from [cx, cy, w, h] to [x1, y1, x2, y2] and scale
+            scaled_boxes = box_ops.box_cxcywh_to_xyxy(boxes_to_draw)
+            scaled_boxes = scaled_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_boxes.device)
+
+            # Draw boxes
+            for box, label, score in zip(scaled_boxes, labels_to_draw, scores_to_draw):
+                box = box.cpu().tolist()
+                draw.rectangle(box, outline="red", width=2)
+                draw.text((box[0] + 2, box[1] + 2), f"L:{label.item()} S:{score.item():.2f}", fill="red")
+
+        # Save image
+        save_path = os.path.join(img_output_dir, f"epoch{epoch}_step{step}.png")
+        img.save(save_path)
+
+23.rfdetr\engine.py文件train_one_epoch方法
+132行
+if epoch % 5 == 0 and data_iter_step % 10 == 0:
+                    try:
+                        image_id = new_targets[0]['image_id'].item()
+                        if representative_image_ids and image_id in representative_image_ids:
+                            save_detection_images(outputs, new_targets, new_samples, epoch, data_iter_step, i, coco_dataset=coco_dataset)
+改为
+if epoch % 5 == 0:
+                    try:
+                        # Iterate over each target in the sub-batch
+                        for j in range(len(new_targets)):
+                            image_id = new_targets[j]['image_id'].item()
+                            if representative_image_ids and image_id in representative_image_ids:
+                                # Pass only the relevant data for the specific image
+                                single_output = {k: v[j:j+1] for k, v in outputs.items()}
+                                single_target = [new_targets[j]]
+                                single_sample = NestedTensor(new_samples.tensors[j:j+1], new_samples.mask[j:j+1])
+                                save_detection_images(single_output, single_target, single_sample, epoch, data_iter_step, i, coco_dataset=coco_dataset)
+def evaluate
+if writer:
+        for k, v in stats.items():
+            if isinstance(v, (int, float)):
+                writer.add_scalar(f'eval/{k}', v, epoch)
+        if 'mAP@.50-.95' in stats:
+            writer.add_scalar('eval/mAP_50-95', stats['mAP@.50-.95'], epoch)
+            writer.add_scalar('eval/mAP_50', stats['mAP@.50'], epoch)
+            writer.add_scalar('eval/FPS', stats['fps'], epoch)
+        if "segm" in postprocessors.keys():
+            stats["coco_eval_masks"] = coco_evaluator.coco_eval["segm"].stats.tolist()
+改为
+if writer:
+        # Log main stats
+        for k, v in stats.items():
+            if isinstance(v, (int, float)) and k not in ['fps', 'mAP@.50-.95', 'mAP@.50']:
+                writer.add_scalar(f'eval/{k}', v, epoch)
+        
+        # Log specific metrics for clarity in TensorBoard
+        if 'mAP@.50-.95' in stats:
+            writer.add_scalar('eval/mAP@.50-.95', stats['mAP@.50-.95'], epoch)
+        if 'mAP@.50' in stats:
+            writer.add_scalar('eval/mAP@.50', stats['mAP@.50'], epoch)
+        if 'fps' in stats:
+            writer.add_scalar('eval/FPS', stats['fps'], epoch)
+
+    if coco_evaluator and "segm" in postprocessors.keys():
+        stats["coco_eval_masks"] = coco_evaluator.coco_eval["segm"].stats.tolist()
+309行
+if len(stats["coco_eval_bbox"]) > 1: # Ensure stats has enough elements
+                map_50_95 = 0.0
+                map_50 = 0.0
+                if len(stats["coco_eval_bbox"]) > 1:
+                    map_50_95 = stats["coco_eval_bbox"][0]
+                    map_50 = stats["coco_eval_bbox"][1]
+                stats['mAP@.50-.95'] = map_50_95
+                stats['mAP@.50'] = map_50
+                # Add mAP values to metric_logger
+                metric_logger.add_meter("mAP@.50-.95", utils.SmoothedValue(window_size=1, fmt="{value:.4f}"))
+                metric_logger.add_meter("mAP@.50", utils.SmoothedValue(window_size=1, fmt="{value:.4f}"))
+                metric_logger.meters["mAP@.50-.95"].update(map_50_95)
+                metric_logger.meters["mAP@.50"].update(map_50)
+                print(f"mAP@.50-.95: {map_50_95:.4f}")
+                print(f"mAP@.50: {map_50:.4f}")
+
+    if writer and epoch is not None:
+        writer.add_scalar('eval/FPS', fps, epoch)
+        # Log all stats from metric_logger
+        for k, meter in metric_logger.meters.items():
+            if k != 'coco_eval_bbox': # Exclude coco_eval_bbox as it's a list
+                writer.add_scalar(f'eval/{k}', meter.global_avg, epoch)
+改为
+stats['mAP@.50-.95'] = stats["coco_eval_bbox"][0]
+            stats['mAP@.50'] = stats["coco_eval_bbox"][1]
+
+    if writer and epoch is not None:
+        # Log main stats
+        for k, v in stats.items():
+            if isinstance(v, (int, float)) and k not in ['fps', 'mAP@.50-.95', 'mAP@.50', 'coco_eval_bbox']:
+                writer.add_scalar(f'eval/{k}', v, epoch)
+        
+        # Log specific metrics for clarity in TensorBoard
+        if 'mAP@.50-.95' in stats:
+            writer.add_scalar('eval/mAP@.50-.95', stats['mAP@.50-.95'], epoch)
+        if 'mAP@.50' in stats:
+            writer.add_scalar('eval/mAP@.50', stats['mAP@.50'], epoch)
+        if 'fps' in stats:
+            writer.add_scalar('eval/FPS', stats['fps'], epoch)
+
+def save_detection_images
+# Save image
+        save_path = os.path.join(img_output_dir, f"epoch{epoch}_step{step}.png")
+改为
+# Save image with a unique name
+        save_path = os.path.join(img_output_dir, f"epoch{epoch}_step{step}_sub{sub_step}.png")
+
+        
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+v4改动
+24.rfdetr\engine.py文件
+def train_one_epoch
+83行插入
+saved_representative_images_this_epoch = set()
+
+131行
+# Save images periodically to check detection results
+                if epoch % 5 == 0:
+                    try:
+                        # Iterate over each target in the sub-batch
+                        for j in range(len(new_targets)):
+                            image_id = new_targets[j]['image_id'].item()
+                            if representative_image_ids and image_id in representative_image_ids:
+                                # Pass only the relevant data for the specific image
+                                single_output = {k: v[j:j+1] for k, v in outputs.items()}
+                                single_target = [new_targets[j]]
+                                single_sample = NestedTensor(new_samples.tensors[j:j+1], new_samples.mask[j:j+1])
+                                save_detection_images(single_output, single_target, single_sample, epoch, data_iter_step, i, coco_dataset=coco_dataset)
+                    except Exception as e:
+                        print(f"Error saving detection image: {e}")
+改为
+# Save images periodically to check detection results
+                if representative_image_ids:
+                    for j in range(len(new_targets)):
+                        image_id = new_targets[j]['image_id'].item()
+                        # print(f"Checking image_id: {image_id}, is in representative: {image_id in representative_image_ids}, is already saved: {image_id in saved_representative_images_this_epoch}")
+                        if image_id in representative_image_ids and image_id not in saved_representative_images_this_epoch:
+                            try:
+                                print(f"Saving detection image for image_id: {image_id} in epoch {epoch}")
+                                single_output = {k: v[j:j+1] for k, v in outputs.items()}
+                                single_target = [new_targets[j]]
+                                single_sample = NestedTensor(new_samples.tensors[j:j+1], new_samples.mask[j:j+1])
+                                save_detection_images(single_output, single_target, single_sample, epoch, coco_dataset=coco_dataset, criterion=criterion)
+                                saved_representative_images_this_epoch.add(image_id)
+                            except Exception as e:
+                                print(f"Error saving detection image {image_id} in epoch {epoch}: {e}")
+
+
+def evaluate
+map_50_95 = coco_evaluator.coco_eval['bbox'].stats[0]
+            map_50 = coco_evaluator.coco_eval['bbox'].stats[1]
+            stats['mAP@.50-.95'] = map_50_95
+            stats['mAP@.50'] = map_50
+            print(f"mAP@.50-.95: {map_50_95:.4f}")
+            print(f"mAP@.50: {map_50:.4f}")
+
+    if writer:
+        # Log main stats
+        for k, v in stats.items():
+            if isinstance(v, (int, float)) and k not in ['fps', 'mAP@.50-.95', 'mAP@.50']:
+改为
+# Ensure mAP stats are calculated and available before writing
+            if stats["coco_eval_bbox"]:
+                map_50_95 = stats["coco_eval_bbox"][0]
+                map_50 = stats["coco_eval_bbox"][1]
+                stats['mAP@.50-.95'] = map_50_95
+                stats['mAP@.50'] = map_50
+                print(f"mAP@.50-.95: {map_50_95:.4f}")
+                print(f"mAP@.50: {map_50:.4f}")
+
+    if writer and epoch is not None:
+        # Log main stats
+        for k, v in stats.items():
+            if isinstance(v, (int, float)) and k not in ['fps', 'mAP@.50-.95', 'mAP@.50', 'coco_eval_bbox']:
+之后   
+# Ensure mAP stats are calculated and available before writing
+            if stats["coco_eval_bbox"]:
+                map_50_95 = stats["coco_eval_bbox"][0]
+                map_50 = stats["coco_eval_bbox"][1]
+                stats['mAP@.50-.95'] = map_50_95
+                stats['mAP@.50'] = map_50
+                print(f"mAP@.50-.95: {map_50_95:.4f}")
+                print(f"mAP@.50: {map_50:.4f}")
+
+    if writer and epoch is not None:
+        # Log main stats
+        for k, v in stats.items():
+            if isinstance(v, (int, float)) and k not in ['fps', 'mAP@.50-.95', 'mAP@.50', 'coco_eval_bbox']:
+                writer.add_scalar(f'eval/{k}', v, epoch)
+        
+        # Log specific metrics for clarity in TensorBoard
+        if 'mAP@.50-.95' in stats:
+            writer.add_scalar('eval/mAP@.50-.95', stats['mAP@.50-.95'], epoch)
+        if 'mAP@.50' in stats:
+            writer.add_scalar('eval/mAP@.50', stats['mAP@.50'], epoch)
+        if 'fps' in stats:
+            writer.add_scalar('eval/FPS', stats['fps'], epoch)
+改为
+if len(stats["coco_eval_bbox"]) > 1: # Ensure stats has enough elements
+                map_50_95 = 0.0
+                map_50 = 0.0
+                if len(stats["coco_eval_bbox"]) > 1:
+                    map_50_95 = stats["coco_eval_bbox"][0]
+                    map_50 = stats["coco_eval_bbox"][1]
+                stats['mAP@.50-.95'] = map_50_95
+                stats['mAP@.50'] = map_50
+                # Add mAP values to metric_logger
+                metric_logger.add_meter("mAP@.50-.95", utils.SmoothedValue(window_size=1, fmt="{value:.4f}"))
+                metric_logger.add_meter("mAP@.50", utils.SmoothedValue(window_size=1, fmt="{value:.4f}"))
+                metric_logger.meters["mAP@.50-.95"].update(map_50_95)
+                metric_logger.meters["mAP@.50"].update(map_50)
+                print(f"mAP@.50-.95: {map_50_95:.4f}")
+                print(f"mAP@.50: {map_50:.4f}")
+
+    if writer and epoch is not None:
+        writer.add_scalar('eval/FPS', fps, epoch)
+        # Log all stats from metric_logger
+        for k, meter in metric_logger.meters.items():
+            if k != 'coco_eval_bbox': # Exclude coco_eval_bbox as it's a list
+                writer.add_scalar(f'eval/{k}', meter.global_avg, epoch)
+
+
+                 
+
+def save_detection_images(outputs, targets, samples, epoch, step, sub_step, output_dir="./result", threshold=0.7, coco_dataset=None):
+改为
+def save_detection_images(outputs, targets, samples, epoch, output_dir="./result", coco_dataset=None, criterion=None):
+    """
+    Saves images by drawing matched predicted boxes on top of the original images
+    which already contain ground truth boxes.
+    """
+    # Get image_id and filename
+    target = targets[0]
+    image_id = target['image_id'].item()
+    img_info = coco_dataset.loadImgs(image_id)[0]
+    img_filename = img_info['file_name']
+
+    # Load the original image from the visual dataset (which has GT boxes)
+    original_image_path = os.path.join("dataset/visual/train", img_filename)
+    if not os.path.exists(original_image_path):
+        print(f"Warning: Original image not found at {original_image_path}, skipping.")
+        return
+    
+    img = Image.open(original_image_path).convert('RGB')
+    draw = ImageDraw.Draw(img)
+
+    # Get original size for scaling boxes
+    orig_size = target['orig_size']
+    img_h, img_w = orig_size.cpu().numpy()
+
+    # Prepare output directory
+    img_name_without_ext = os.path.splitext(img_filename)[0]
+    img_output_dir = os.path.join(output_dir, img_name_without_ext)
+    os.makedirs(img_output_dir, exist_ok=True)
+    print(f"Saving image to directory: {img_output_dir}")
+
+    if criterion:
+        # Use matcher to find corresponding predicted boxes
+        indices = criterion.matcher(outputs, targets)
+        pred_idx, _ = indices[0]  # We only need the indices of the predicted boxes
+
+        # --- Draw Matched Predicted Boxes (Red) ---
+        pred_boxes = outputs['pred_boxes'][0][pred_idx]
+        pred_logits = outputs['pred_logits'][0][pred_idx]
+        scores, labels = pred_logits.softmax(-1).max(-1)
+
+        if pred_boxes.shape[0] > 0:
+            scaled_pred_boxes = box_ops.box_cxcywh_to_xyxy(pred_boxes)
+            scaled_pred_boxes = scaled_pred_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_pred_boxes.device)
+            
+            for box, label, score in zip(scaled_pred_boxes, labels, scores):
+                box = box.cpu().tolist()
+                category_id = label.item()
+                category_name = coco_dataset.cats[category_id]['name'] if category_id in coco_dataset.cats else f"ID:{category_id}"
+                
+                draw.rectangle(box, outline="red", width=2)
+                
+                text = f"{category_name} {score.item():.2f}"
+                text_position = (box[0] + 2, box[1] + 2)
+                
+                try:
+                    text_bbox = draw.textbbox(text_position, text)
+                    draw.rectangle(text_bbox, fill="red")
+                    draw.text(text_position, text, fill='white')
+                except AttributeError:  # Fallback for older Pillow versions
+                    text_size = draw.textsize(text)
+                    draw.rectangle([text_position[0], text_position[1], text_position[0] + text_size[0], text_position[1] + text_size[1]], fill="red")
+                    draw.text(text_position, text, fill='white')
+    else:
+        print("Warning: `criterion` not provided to `save_detection_images`. Cannot determine which boxes are used for loss. Skipping image save.")
+        return
+
+    # Save the modified image
+    save_path = os.path.join(img_output_dir, f"epoch_{epoch}.png")
+    img.save(save_path)
+
+
+
+
+23.rfdetr\main.py文件class Model:def train
+添加print(f"Selected {len(representative_image_ids)} representative image IDs for visualization.")
+1165行
+if args.use_ema:
+                ema_test_stats, _ = evaluate(
+                    self.ema_m.module, criterion, postprocessors, data_loader_val, base_ds, device, args=args, writer=writer, epoch=epoch
+                )
+改为
+if args.use_ema:
+                ema_writer = SummaryWriter(os.path.join(args.output_dir, 'ema_eval'))
+                ema_test_stats, _ = evaluate(
+                    self.ema_m.module, criterion, postprocessors, data_loader_val, base_ds, device, args=args, writer=ema_writer, epoch=epoch
+                )
+                ema_writer.close()
+
+if __name__ == '__main__':
+1767行
+writer = SummaryWriter('runs')
+改为
+writer = SummaryWriter(args.output_dir)
+
+24.注释微调部分
+# from peft import LoraConfig, get_peft_model
+
+25.rfdetr\models\backbone\backbone.py
+# from peft import LoraConfig, get_peft_model, PeftModel
+
+26.rfdetr\models\backbone\dinov2_with_windowed_attn.py
+28行去除torch_int,
+261行class WindowedDinov2WithRegistersEmbeddings(nn.Module):
+def interpolate_pos_encoding
+
+sqrt_num_positions = torch_int(num_positions**0.5)
+改为
+sqrt_num_positions = int(num_positions**0.5)
+
+271行
+size=(torch_int(height), torch_int(width)),  # Explicit size instead of scale_factor
+改为
+size=(int(height), int(width)),  # Explicit size instead of scale_factor
+
+598行class WindowedDinov2WithRegistersLayer(nn.Module):添加
+config._attn_implementation = "eager"
+
+27.1633行parser.add_argument('--batch_size', default=2, type=int)
+default=2改为1
+
+28.修改num_classes参数以匹配数据集类别数(10个类别)
+#    - rfdetr/main.py第1629行: parser.add_argument('--num_classes', default=10, type=int)
+#    - rfdetr/config.py第27行: num_classes: int = 10
+
+29.rfdetr/config.py - 将num_classes从10改为11
+rfdetr/main.py - 在populate_args函数中将num_classes默认值从10改为11
+rfdetr/main.py - 在命令行参数解析器中将num_classes默认值从10改为11
+
+30根据数据集将rfdetr/config.py与rfdetr/main.py的num_classes改为10
+31.rfdetr/engine.py的train_one_epoch函数中添加训练损失记录到tensorboard
+Training time 9:20:12
+Results saved to output\results.json
+32. 在rfdetr/engine.py的save_detection_images函数中，将`text = f"L:{label.item()} S:{score.item():.2f}"`改为`text = f"{category_name} {score.item():.2f}"`。
+33. 在rfdetr/engine.py的evaluate函数中，将
+    if writer and epoch is not None:
+        # Log all stats from metric_logger
+        for k, meter in metric_logger.meters.items():
+            if k != 'coco_eval_bbox': # Exclude coco_eval_bbox as it's a list
+                writer.add_scalar(f'eval/{k}', meter.global_avg, epoch)
+        if 'fps' in stats:
+            writer.add_scalar('eval/FPS', stats['fps'], epoch)
+    改为
+    if writer and epoch is not None:
+        for k, v in stats.items():
+            if isinstance(v, (int, float)):
+                writer.add_scalar(f'eval/{k}', v, epoch)
+34. 在rfdetr/engine.py的save_detection_images函数中，将`category_name = coco_dataset.cats[category_id]['name'] if category_id in coco_dataset.cats else f"ID:{category_id}"`改为`category_name = {1: "person", 2: "rider", 3: "car", 4: "bus", 5: "truck", 6: "bike", 7: "motor", 8: "traffic light", 9: "traffic sign", 10: "train"}.get(category_id, f"ID:{category_id}")`。
+35. 在rfdetr/engine.py的evaluate函数中，将
+    if writer and epoch is not None:
+        for k, v in stats.items():
+            if isinstance(v, (int, float)):
+                writer.add_scalar(f'eval/{k}', v, epoch)
+    改为
+    if writer and epoch is not None:
+        writer.add_scalar('eval/loss', stats['loss'], epoch)
+        writer.add_scalar('eval/class_error', stats['class_error'], epoch)
+        writer.add_scalar('eval/mAP@.50-.95', stats['mAP@.50-.95'], epoch)
+        writer.add_scalar('eval/mAP@.50', stats['mAP@.50'], epoch)
+        writer.add_scalar('eval/FPS', stats['fps'], epoch)
+
+36. 在rfdetr/engine.py的evaluate函数中，将`print(f"FPS (batch_size=1): {fps:.2f}")`改为`print(f"FPS (batch_size=1): {fps:.2f}")`并在TensorBoard中记录FPS。
+37. 在rfdetr/engine.py的save_detection_images函数中，添加`sys.stdout.flush()`以确保立即打印类别名称。
+38. 在 `rfdetr/engine.py` 的 `save_detection_images` 函数中进行了以下修改以解决可视化问题：
+    - 在文件顶部导入 `ImageFont`。
+    - 添加了字体加载逻辑，优先使用 "arial.ttf"，失败则回退到默认字体。
+    - 将硬编码的类别名称改为从 `coco_dataset` 动态获取。
+    - 修复了在旧版 Pillow 的回退路径中 `draw.textsize` 和 `draw.text` 未传递 `font` 对象的问题。
+    - 优化了标签文本的位置和背景，以提高可读性。
+    - 增加了在找不到原始带标注图像时，从张量重建图像的回退功能。
+39. 在 `rfdetr/engine.py` 的 `evaluate` 函数中，为 TensorBoard 日志记录添加了健壮性检查：
+    - 在尝试使用 `writer.add_scalar` 记录 'class_error', 'mAP@.50-.95', 'mAP@.50', 和 'FPS' 之前，先检查这些键是否存在于 `stats` 字典中。
+    - 如果某个键不存在，则会打印一条警告信息，而不是引发错误，从而避免程序中断并帮助诊断问题。
+
+40. 在文件 'rfdetr\main.py' 中: ## 变更摘要
+
+本次变更主要是对`rfdetr/main.py`文件进行了精简和参数调整：
+
+41. **删除了大量历史修改注释**：移除了文件开头的详细修改日志（v7版本修改说明），该日志包含了之前解决tensorboard中map曲线显示问题的各种修改记录。
+
+42. **调整了模型类别数量**：
+   - 将`populate_args`函数中的`num_classes`参数默认值从2改为10
+   - 将`get_args_parser`函数中的`--num_classes`参数默认值从2改为10
+
+43. **保留了核心代码结构**：维持了原有的Model类定义、参数解析器和主要导入语句不变，仅删除了不必要的注释和空行。
+
+这次变更主要是为了适应多类别检测任务（从2类扩展到10类），同时通过删除冗长的历史注释使代码更加简洁。
+
+44. 在文件 'rfdetr\config.py' 中: 本次变更修改了 `rfdetr/config.py` 文件中的 `ModelConfig` 类，将 `num_classes` 参数的默认值从 90 调整为 10。这个参数用于指定模型处理的类别数量，变更表明模型默认处理的类别数量有所减少，可能是为了适应特定场景或简化模型复杂度。
+
+45. 在文件 'rfdetr\main.py' 中: 本次变更修改了模型加载预训练权重时的类别不匹配提示信息。主要变化包括：
+
+将日志级别从 `warning` 改为 `info`，表明这不再是警告信息而是常规信息提示
+重写了提示文本，使其更加清晰友好：
+   - 明确指出这是"使用不同类别数进行微调"的场景
+   - 更清晰地展示预训练模型的类别数和当前配置的类别数
+   - 明确说明检测头将被重新初始化以匹配当前数据集
+
+这些修改使得用户在加载预训练权重进行微调时能获得更清晰、更友好的提示信息，减少不必要的担忧。
+
+46. 在文件 'rfdetr\engine.py' 中: 本次代码变更为rfdetr/engine.py文件中save_detection_images函数内的类别映射获取逻辑优化。变更简化了从数据集中获取类别名称的方式，由原来的手动构建categories字典改为直接使用coco_dataset对象的cats属性。这种修改使代码更加简洁，同时通过条件判断确保了对未知类别ID的容错处理。
+
+40. 在 `rfdetr/engine.py` 的 `save_detection_images` 函数中，进一步优化了字体加载逻辑：
+    - 将字体路径明确指定为 `C:/Windows/Fonts/arial.ttf`，以提高在 Windows 系统上的加载成功率。
+    - 将字体大小增加到 20，以确保标签文本在各种分辨率下都清晰可见。
+    - 添加了调试信息，用于在加载字体时打印成功或失败的状态。
+
+41. 在 `rfdetr/engine.py` 的 `save_detection_images` 函数中，为彻底解决部分标签仍显示为 ID 的问题，将动态获取类别名称的逻辑:
+    `category_name = coco_dataset.cats[category_id]['name'] if category_id in coco_dataset.cats else f"ID:{category_id}"`
+    替换为使用硬编码的类别字典:
+    `category_mapping = {1: "person", 2: "rider", 3: "car", 4: "bus", 5: "truck", 6: "bike", 7: "motor", 8: "traffic light", 9: "traffic sign", 10: "train"}`
+    `category_name = category_mapping.get(category_id, f"ID:{category_id}")`
+
+42. 修复可视化不显示文本标签问题：
+    - 增强字体加载逻辑，添加多个字体选项作为备选，包括中文字体（黑体、微软雅黑）
+    - 增加字体大小从20到24，提高标签可见性
+    - 改进文本位置计算，确保标签不会超出图像边界
+    - 优化文本绘制逻辑，添加红色背景框和白色文字以提高对比度
+    - 添加调试输出，记录绘制的标签数量和内容
+    - 添加sys.stdout.flush()确保立即输出调试信息
+
+43. 修复tensorboard不显示fps与map问题：
+    - 在FPS计算后立即记录到TensorBoard，确保数据不会丢失
+    - 增强mAP值提取的错误处理，确保coco_eval_bbox列表长度足够
+    - 添加详细的调试输出，记录FPS和mAP值以及它们是否成功记录到TensorBoard
+    - 在所有指标记录后调用writer.flush()，确保数据立即写入TensorBoard日志
+    - 改进错误处理和警告信息，帮助诊断潜在问题
+
+44. 进一步修复可视化不显示文本标签问题：
+    - 优先从coco_dataset中获取类别名称，而不是直接使用硬编码映射
+    - 添加详细的调试输出，显示可用的类别和映射关系
+    - 打印每个检测到的类别ID和对应的类别名称，便于诊断问题
+    - 增强文本绘制过程的调试信息，包括文本位置和绘制结果
+    - 确保在找不到类别名称时提供有意义的回退方案
+
+47. 在文件 'rfdetr\main.py' 中: 这个变更摘要如下：
+
+从 `rfdetr/main.py` 文件中移除了对 `argparse` 模块的导入。该变更位于文件顶部的导入部分，删除了 `import argparse` 这一行，但保留了其他导入语句如 `ast`、`copy` 和 `datetime` 等。这可能意味着代码中不再需要使用命令行参数解析功能，或者该功能将被其他方式替代。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index 255da4b..9e672dd 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -22,7 +22,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ if project_root not in sys.path:
+     sys.path.insert(0, project_root)
+ 
+-import argparse
++
+ import ast
+ import copy
+ import datetime
+
+--- End Diff ---
+
+48. 在文件 'rfdetr\main.py' 中: ## 代码变更摘要
+
+在`rfdetr/main.py`文件中添加了`argparse`模块的导入语句。这一变更将为程序添加命令行参数解析功能，使其能够从命令行接收和处理参数。这是一个基础性的修改，为后续可能的命令行交互功能做准备。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index 9e672dd..255da4b 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -22,7 +22,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ if project_root not in sys.path:
+     sys.path.insert(0, project_root)
+ 
+-
++import argparse
+ import ast
+ import copy
+ import datetime
+
+--- End Diff ---
+
+49. 在文件 'rfdetr\engine.py' 中: # 变更摘要：增强评估函数与可视化功能
+
+本次变更主要针对`rfdetr/engine.py`文件中的评估和可视化功能进行了全面增强，核心内容包括：
+
+## 1. FPS计算与日志记录增强
+- 重复了FPS计算代码（可能为临时测试）
+- 添加了更详细的TensorBoard日志记录和打印输出
+- 新增`writer.flush()`确保TensorBoard写入立即执行
+
+## 2. mAP指标提取的健壮性改进
+- 增加了对`coco_eval_bbox`列表长度的检查，防止索引越界错误
+- 添加了mAP值的打印输出和警告信息
+- 改进了TensorBoard日志记录的错误处理机制
+
+## 3. 图像保存与可视化功能重大改进
+- **字体加载增强**：
+  - 支持多种Windows字体路径尝试（包括中文字体如黑体、微软雅黑）
+  - 增大字体尺寸从15到24，提高可见性
+  - 添加字体加载失败的详细日志
+
+- **类别映射改进**：
+  - 优先从coco_dataset获取类别名称
+  - 添加硬编码类别映射作为备选方案
+  - 增加详细的类别映射调试信息
+
+- **文本绘制增强**：
+  - 改进文本位置计算逻辑，确保标签始终可见
+  - 添加文本背景以提高可读性
+  - 增加对不同Pillow版本的兼容性处理
+  - 添加绘制框计数和详细的绘制过程日志
+
+- **错误处理与调试**：
+  - 添加多层错误处理和回退机制
+  - 增加大量调试输出，便于问题定位
+  - 添加`sys.stdout.flush()`确保日志立即输出
+
+这些变更显著提高了评估过程的健壮性和可视化效果，使模型评估结果更加清晰、可靠，并便于调试分析。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index f1c4589..2e780db 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -293,8 +293,19 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
+         fps = 0
+     
+     print(f"FPS (batch_size=1): {fps:.2f}")
++    # Calculate FPS
++    if forward_pass_times:
++        avg_forward_time = np.mean(forward_pass_times)
++        fps = 1 / avg_forward_time
++    else:
++        fps = 0
++    
++    print(f"FPS (batch_size=1): {fps:.2f}")
++    
++    # Log FPS to TensorBoard immediately after calculation
+     if writer and epoch is not None:
+         writer.add_scalar('eval/FPS', fps, epoch)
++        print(f"Logged FPS to TensorBoard: {fps:.2f}")
+ 
+     stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+     stats['fps'] = fps
+@@ -302,28 +313,43 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
+     if coco_evaluator is not None:
+         if "bbox" in postprocessors.keys():
+             stats["coco_eval_bbox"] = coco_evaluator.coco_eval["bbox"].stats.tolist()
+-            stats['mAP@.50-.95'] = stats["coco_eval_bbox"][0]
+-            stats['mAP@.50'] = stats["coco_eval_bbox"][1]
++            # Ensure mAP values are properly extracted
++            if len(stats["coco_eval_bbox"]) > 1:
++                stats['mAP@.50-.95'] = stats["coco_eval_bbox"][0]
++                stats['mAP@.50'] = stats["coco_eval_bbox"][1]
++                print(f"mAP@.50-.95: {stats['mAP@.50-.95']:.4f}")
++                print(f"mAP@.50: {stats['mAP@.50']:.4f}")
++            else:
++                print("Warning: coco_eval_bbox stats list is too short.")
+ 
+     if writer and epoch is not None:
++        # Log basic metrics
+         writer.add_scalar('eval/loss', stats['loss'], epoch)
+         if 'class_error' in stats:
+             writer.add_scalar('eval/class_error', stats['class_error'], epoch)
+         
++        # Log mAP metrics with proper error handling
+         if 'mAP@.50-.95' in stats:
+             writer.add_scalar('eval/mAP@.50-.95', stats['mAP@.50-.95'], epoch)
++            print(f"Logged mAP@.50-.95 to TensorBoard: {stats['mAP@.50-.95']:.4f}")
+         else:
+             print("Warning: 'mAP@.50-.95' not found in stats. Skipping TensorBoard log.")
+             
+         if 'mAP@.50' in stats:
+             writer.add_scalar('eval/mAP@.50', stats['mAP@.50'], epoch)
++            print(f"Logged mAP@.50 to TensorBoard: {stats['mAP@.50']:.4f}")
+         else:
+             print("Warning: 'mAP@.50' not found in stats. Skipping TensorBoard log.")
+ 
++        # Log FPS again to ensure it's recorded
+         if 'fps' in stats:
+             writer.add_scalar('eval/FPS', stats['fps'], epoch)
++            print(f"Logged FPS to TensorBoard (from stats): {stats['fps']:.2f}")
+         else:
+             print("Warning: 'fps' not found in stats. Skipping TensorBoard log.")
++        
++        # Ensure TensorBoard writes are flushed
++        writer.flush()
+ 
+     if coco_evaluator and "segm" in postprocessors.keys():
+         stats["coco_eval_masks"] = coco_evaluator.coco_eval["segm"].stats.tolist()
+@@ -365,12 +391,28 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+ 
+     draw = ImageDraw.Draw(img)
+ 
+-    # Load font
+-    try:
+-        font = ImageFont.truetype("arial.ttf", 15)
+-    except IOError:
+-        print("Arial font not found. Falling back to default font.")
++    # Load font with multiple fallback options
++    font_paths = [
++        "C:/Windows/Fonts/arial.ttf",
++        "C:/Windows/Fonts/simhei.ttf",  # 黑体
++        "C:/Windows/Fonts/msyh.ttf",    # 微软雅黑
++        "C:/Windows/Fonts/tahoma.ttf"
++    ]
++    font_size = 24  # Increased font size for better visibility
++    font = None
++    
++    for font_path in font_paths:
++        try:
++            font = ImageFont.truetype(font_path, font_size)
++            print(f"Successfully loaded font from {font_path}")
++            break
++        except IOError:
++            print(f"Warning: Font not found at {font_path}. Trying next option...")
++    
++    if font is None:
++        print("Warning: No truetype font found. Falling back to default font.")
+         font = ImageFont.load_default()
++        font_size = 12  # Default font is usually smaller
+ 
+     # Get original size for scaling boxes
+     orig_size = target['orig_size']
+@@ -382,6 +424,9 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+     os.makedirs(img_output_dir, exist_ok=True)
+     print(f"Saving image to directory: {img_output_dir}")
+ 
++    # Count of drawn boxes for debugging
++    drawn_boxes = 0
++
+     if criterion:
+         # Use matcher to find corresponding predicted boxes
+         indices = criterion.matcher(outputs, targets)
+@@ -396,31 +441,91 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+             scaled_pred_boxes = box_ops.box_cxcywh_to_xyxy(pred_boxes)
+             scaled_pred_boxes = scaled_pred_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_pred_boxes.device)
+             
++            # Try to get category names from coco_dataset first
++            category_mapping = {}
++            if coco_dataset and hasattr(coco_dataset, 'cats'):
++                print(f"Available categories in coco_dataset: {coco_dataset.cats}")
++                for cat_id, cat_info in coco_dataset.cats.items():
++                    category_mapping[cat_id] = cat_info['name']
++                    print(f"Added category mapping: {cat_id} -> {cat_info['name']}")
++            
++            # If no categories found in coco_dataset, use hardcoded mapping
++            if not category_mapping:
++                print("No categories found in coco_dataset, using hardcoded mapping")
++                category_mapping = {
++                    1: "person", 2: "rider", 3: "car", 4: "bus", 5: "truck",
++                    6: "bike", 7: "motor", 8: "traffic light", 9: "traffic sign", 10: "train"
++                }
++            
++            print(f"Final category mapping: {category_mapping}")
++            
+             for box, label, score in zip(scaled_pred_boxes, labels, scores):
+                 box = box.cpu().tolist()
+                 category_id = label.item()
+-                category_name = coco_dataset.cats[category_id]['name'] if category_id in coco_dataset.cats else f"ID:{category_id}"
++                print(f"Processing box with category_id: {category_id}")
+                 
++                # Get category name with detailed debugging
++                if category_id in category_mapping:
++                    category_name = category_mapping[category_id]
++                    print(f"Found category name in mapping: {category_name}")
++                else:
++                    category_name = f"ID:{category_id}"
++                    print(f"Category ID {category_id} not found in mapping, using ID format")
++                
++                # Draw bounding box
+                 draw.rectangle(box, outline="red", width=2)
+                 
++                # Prepare text
+                 text = f"{category_name} {score.item():.2f}"
+-                text_position = (box[0], box[1] - 15 if box[1] - 15 > 0 else box[1])
++                print(f"Text to draw: {text}")
++                
++                # Calculate text position with better visibility
++                text_x = box[0] + 2
++                text_y = box[1] - font_size - 2  # Position above the box
+                 
++                # If text would be above image, position it below the top of the box
++                if text_y < 0:
++                    text_y = box[1] + 2
++                
++                text_position = (text_x, text_y)
++                print(f"Text position: {text_position}")
++                
++                # Try to draw text with background for better visibility
+                 try:
+                     # Use textbbox for modern Pillow versions
+                     text_bbox = draw.textbbox(text_position, text, font=font)
+-                    # Adjust bbox to add some padding
+-                    padded_bbox = (text_bbox[0]-2, text_bbox[1]-2, text_bbox[2]+2, text_bbox[3]+2)
+-                    draw.rectangle(padded_bbox, fill="red")
++                    print(f"Text bbox: {text_bbox}")
++                    # Draw background rectangle
++                    draw.rectangle(text_bbox, fill="red")
++                    # Draw text in white for contrast
+                     draw.text(text_position, text, fill="white", font=font)
++                    drawn_boxes += 1
++                    print(f"Successfully drew text with background")
+                 except AttributeError:
+                     # Fallback for older Pillow versions
+-                    text_size = draw.textsize(text, font=font)
+-                    draw.rectangle(
+-                        (text_position[0], text_position[1], text_position[0] + text_size[0], text_position[1] + text_size[1]),
+-                        fill="red"
+-                    )
+-                    draw.text(text_position, text, fill='white', font=font)
++                    try:
++                        text_size = draw.textsize(text, font=font)
++                        print(f"Text size: {text_size}")
++                        # Draw background rectangle
++                        draw.rectangle(
++                            (text_position[0], text_position[1],
++                             text_position[0] + text_size[0], text_position[1] + text_size[1]),
++                            fill="red"
++                        )
++                        # Draw text in white for contrast
++                        draw.text(text_position, text, fill='white', font=font)
++                        drawn_boxes += 1
++                        print(f"Successfully drew text with fallback method")
++                    except Exception as e:
++                        print(f"Error drawing text: {e}")
++                        # Last resort: draw text without background
++                        draw.text(text_position, text, fill='red', font=font)
++                        drawn_boxes += 1
++                        print(f"Drew text without background due to error")
++                
++                print(f"Drawn box {drawn_boxes}: {category_name} at {box} with score {score.item():.2f}")
++        else:
++            print("No predicted boxes to draw.")
+     else:
+         print("Warning: `criterion` not provided to `save_detection_images`. Cannot determine which boxes are used for loss. Skipping image save.")
+         return
+@@ -428,3 +533,5 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+     # Save the modified image
+     save_path = os.path.join(img_output_dir, f"epoch_{epoch}.png")
+     img.save(save_path)
++    print(f"Image saved to {save_path} with {drawn_boxes} labeled boxes")
++    sys.stdout.flush()  # Ensure immediate output
+
+--- End Diff ---
+
+50. 在文件 'rfdetr\engine.py' 中: ## 代码变更摘要
+
+本次变更主要针对`rfdetr/engine.py`文件中的字体加载逻辑进行了优化和增强，以提高跨平台兼容性和错误处理能力。
+
+### 核心变更内容：
+
+1. **字体路径扩展**：
+   - 新增了Linux和macOS系统的字体路径，增强了跨平台兼容性
+   - 将微软雅黑字体路径从`.ttf`修正为`.ttc`（更准确的文件扩展名）
+
+2. **字体加载逻辑优化**：
+   - 在尝试加载字体前，先检查文件是否存在（`os.path.exists`）
+   - 改进了异常处理，同时捕获`IOError`和`OSError`，并输出具体错误信息
+
+3. **字体大小调整**：
+   - 将字体大小从24调整为20，提供更适中的显示效果
+   - 优化了默认字体的回退逻辑，在无法加载TrueType字体时尝试使用更大的默认字体尺寸
+
+4. **错误处理增强**：
+   - 增加了更详细的错误日志输出
+   - 提供了多层次的回退方案，确保在字体加载失败时仍能正常工作
+
+这些变更提高了代码的健壮性和跨平台兼容性，确保在不同操作系统上都能正确加载和显示字体，同时优化了字体大小以获得更好的可视化效果。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 2e780db..316b3f3 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -391,28 +391,37 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+ 
+     draw = ImageDraw.Draw(img)
+ 
+-    # Load font with multiple fallback options
++    # Load font with multiple fallback options and better error处理
+     font_paths = [
+         "C:/Windows/Fonts/arial.ttf",
+         "C:/Windows/Fonts/simhei.ttf",  # 黑体
+-        "C:/Windows/Fonts/msyh.ttf",    # 微软雅黑
+-        "C:/Windows/Fonts/tahoma.ttf"
++        "C:/Windows/Fonts/msyh.ttc",    # 微软雅黑
++        "C:/Windows/Fonts/tahoma.ttf",
++        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
++        "/System/Library/Fonts/Helvetica.ttc",  # macOS
+     ]
+-    font_size = 24  # Increased font size for better visibility
++    font_size = 20  # 适中的字体大小
+     font = None
+     
+     for font_path in font_paths:
+         try:
+-            font = ImageFont.truetype(font_path, font_size)
+-            print(f"Successfully loaded font from {font_path}")
+-            break
+-        except IOError:
+-            print(f"Warning: Font not found at {font_path}. Trying next option...")
++            if os.path.exists(font_path):
++                font = ImageFont.truetype(font_path, font_size)
++                print(f"Successfully loaded font from {font_path}")
++                break
++        except (IOError, OSError) as e:
++            print(f"Warning: Font not found at {font_path}: {e}")
+     
+     if font is None:
+-        print("Warning: No truetype font found. Falling back to default font.")
+-        font = ImageFont.load_default()
+-        font_size = 12  # Default font is usually smaller
++        print("Warning: No truetype font found. Using default font with larger size.")
++        try:
++            # 尝试使用Pillow的默认字体，但增大尺寸
++            font = ImageFont.load_default()
++            font_size = 16
++        except:
++            # 最后的备选方案
++            font = ImageFont.load_default()
++            font_size = 12
+ 
+     # Get original size for scaling boxes
+     orig_size = target['orig_size']
+
+--- End Diff ---
+
+51. 在文件 'rfdetr\engine.py' 中: # 变更摘要：改进目标检测图像保存功能
+
+本次变更对`rfdetr/engine.py`中的`save_detection_images`函数进行了全面优化，主要改进包括：
+
+1. **类别名称获取逻辑增强**：
+   - 实现了多级回退机制，依次尝试从coco_dataset、COCO_CLASSES模块和硬编码映射获取类别信息
+   - 增加了完善的异常处理，确保在任何情况下都能提供类别名称
+
+2. **预测结果过滤**：
+   - 新增0.3的置信度阈值，过滤低置信度预测，提高可视化质量
+
+3. **边界框和文本显示优化**：
+   - 确保边界框坐标在图像范围内，防止越界
+   - 改进文本位置计算，确保标签始终可见
+   - 增强文本背景框绘制逻辑，兼容新旧版本Pillow库
+   - 边界框线条加粗(从2到3)，提高可见性
+
+4. **错误处理和代码健壮性**：
+   - 添加多层try-except结构，提高代码容错能力
+   - 移除冗余调试输出，保留关键错误信息
+
+这些改进使目标检测可视化结果更加清晰、稳定，并增强了代码在各种环境下的适应性。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 316b3f3..155beae 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -450,89 +450,116 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+             scaled_pred_boxes = box_ops.box_cxcywh_to_xyxy(pred_boxes)
+             scaled_pred_boxes = scaled_pred_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_pred_boxes.device)
+             
+-            # Try to get category names from coco_dataset first
++            # 改进的类别名称获取逻辑
+             category_mapping = {}
+-            if coco_dataset and hasattr(coco_dataset, 'cats'):
+-                print(f"Available categories in coco_dataset: {coco_dataset.cats}")
+-                for cat_id, cat_info in coco_dataset.cats.items():
+-                    category_mapping[cat_id] = cat_info['name']
+-                    print(f"Added category mapping: {cat_id} -> {cat_info['name']}")
+-            
+-            # If no categories found in coco_dataset, use hardcoded mapping
+-            if not category_mapping:
+-                print("No categories found in coco_dataset, using hardcoded mapping")
++            try:
++                # 从coco_dataset获取类别映射
++                if coco_dataset and hasattr(coco_dataset, 'cats'):
++                    for cat_id, cat_info in coco_dataset.cats.items():
++                        category_mapping[cat_id] = cat_info['name']
++                
++                # 如果coco_dataset没有类别信息，尝试从util获取
++                if not category_mapping:
++                    try:
++                        from rfdetr.util.coco_classes import COCO_CLASSES
++                        category_mapping = {i+1: name for i, name in enumerate(COCO_CLASSES)}
++                        print(f"Using COCO_CLASSES mapping: {len(category_mapping)} classes")
++                    except ImportError:
++                        print("COCO_CLASSES not found, using basic mapping")
++                        category_mapping = {
++                            1: "person", 2: "bicycle", 3: "car", 4: "motorcycle", 5: "airplane",
++                            6: "bus", 7: "train", 8: "truck", 9: "boat", 10: "traffic light"
++                        }
++                
++            except Exception as e:
++                print(f"Error getting category mapping: {e}, using fallback")
+                 category_mapping = {
+-                    1: "person", 2: "rider", 3: "car", 4: "bus", 5: "truck",
+-                    6: "bike", 7: "motor", 8: "traffic light", 9: "traffic sign", 10: "train"
++                    1: "person", 2: "bicycle", 3: "car", 4: "motorcycle", 5: "airplane",
++                    6: "bus", 7: "train", 8: "truck", 9: "boat", 10: "traffic light"
+                 }
+             
+-            print(f"Final category mapping: {category_mapping}")
++            # 过滤低置信度预测
++            confidence_threshold = 0.3
+             
+             for box, label, score in zip(scaled_pred_boxes, labels, scores):
++                score_value = score.item()
++                if score_value < confidence_threshold:
++                    continue
++                    
+                 box = box.cpu().tolist()
+                 category_id = label.item()
+-                print(f"Processing box with category_id: {category_id}")
+                 
+-                # Get category name with detailed debugging
+-                if category_id in category_mapping:
+-                    category_name = category_mapping[category_id]
+-                    print(f"Found category name in mapping: {category_name}")
+-                else:
+-                    category_name = f"ID:{category_id}"
+-                    print(f"Category ID {category_id} not found in mapping, using ID format")
++                # 获取类别名称
++                category_name = category_mapping.get(category_id, f"Class_{category_id}")
+                 
+-                # Draw bounding box
+-                draw.rectangle(box, outline="red", width=2)
++                # 确保box坐标在图像范围内
++                box = [
++                    max(0, min(box[0], img_w)),
++                    max(0, min(box[1], img_h)),
++                    max(0, min(box[2], img_w)),
++                    max(0, min(box[3], img_h))
++                ]
+                 
+-                # Prepare text
+-                text = f"{category_name} {score.item():.2f}"
+-                print(f"Text to draw: {text}")
++                # 绘制边界框
++                draw.rectangle(box, outline="red", width=3)
+                 
+-                # Calculate text position with better visibility
+-                text_x = box[0] + 2
+-                text_y = box[1] - font_size - 2  # Position above the box
++                # 准备文本
++                text = f"{category_name}: {score_value:.2f}"
+                 
+-                # If text would be above image, position it below the top of the box
+-                if text_y < 0:
+-                    text_y = box[1] + 2
++                # 计算文本位置 - 确保在图像内
++                text_x = max(2, min(box[0] + 2, img_w - 100))
++                text_y = max(2, box[1] - font_size - 2)
++                
++                # 如果文本会超出上边界，放在框内
++                if text_y < 2:
++                    text_y = max(2, box[1] + 2)
+                 
+                 text_position = (text_x, text_y)
+-                print(f"Text position: {text_position}")
+                 
+-                # Try to draw text with background for better visibility
++                # 绘制带背景的文本
+                 try:
+-                    # Use textbbox for modern Pillow versions
+-                    text_bbox = draw.textbbox(text_position, text, font=font)
+-                    print(f"Text bbox: {text_bbox}")
+-                    # Draw background rectangle
+-                    draw.rectangle(text_bbox, fill="red")
+-                    # Draw text in white for contrast
++                    # 获取文本边界框
++                    if hasattr(draw, 'textbbox'):
++                        text_bbox = draw.textbbox(text_position, text, font=font)
++                        text_width = text_bbox[2] - text_bbox[0]
++                        text_height = text_bbox[3] - text_bbox[1]
++                    else:
++                        # 旧版本Pillow的备选方案
++                        text_width = len(text) * font_size * 0.6
++                        text_height = font_size
++                        text_bbox = (text_position[0], text_position[1],
++                                   text_position[0] + text_width, text_position[1] + text_height)
++                    
++                    # 调整背景框大小
++                    padding = 2
++                    bg_box = [
++                        text_bbox[0] - padding,
++                        text_bbox[1] - padding,
++                        text_bbox[2] + padding,
++                        text_bbox[3] + padding
++                    ]
++                    
++                    # 确保背景框在图像内
++                    bg_box[0] = max(0, bg_box[0])
++                    bg_box[1] = max(0, bg_box[1])
++                    bg_box[2] = min(img_w, bg_box[2])
++                    bg_box[3] = min(img_h, bg_box[3])
++                    
++                    # 绘制背景
++                    draw.rectangle(bg_box, fill="red")
++                    
++                    # 绘制文本
+                     draw.text(text_position, text, fill="white", font=font)
+                     drawn_boxes += 1
+-                    print(f"Successfully drew text with background")
+-                except AttributeError:
+-                    # Fallback for older Pillow versions
++                    
++                except Exception as e:
++                    print(f"Error drawing text for {category_name}: {e}")
++                    # 最后的备选：直接绘制文本
+                     try:
+-                        text_size = draw.textsize(text, font=font)
+-                        print(f"Text size: {text_size}")
+-                        # Draw background rectangle
+-                        draw.rectangle(
+-                            (text_position[0], text_position[1],
+-                             text_position[0] + text_size[0], text_position[1] + text_size[1]),
+-                            fill="red"
+-                        )
+-                        # Draw text in white for contrast
+-                        draw.text(text_position, text, fill='white', font=font)
+-                        drawn_boxes += 1
+-                        print(f"Successfully drew text with fallback method")
+-                    except Exception as e:
+-                        print(f"Error drawing text: {e}")
+-                        # Last resort: draw text without background
+-                        draw.text(text_position, text, fill='red', font=font)
++                        draw.text(text_position, text, fill="red", font=font)
+                         drawn_boxes += 1
+-                        print(f"Drew text without background due to error")
+-                
+-                print(f"Drawn box {drawn_boxes}: {category_name} at {box} with score {score.item():.2f}")
++                    except:
++                        pass
+         else:
+             print("No predicted boxes to draw.")
+     else:
+
+--- End Diff ---
+
+52. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+对`rfdetr/engine.py`中的`evaluate`函数进行了以下优化：
+
+1. **移除重复代码**：删除了重复的FPS计算和打印逻辑，避免冗余操作。
+
+2. **增强mAP指标记录**：添加了从COCO评估器中提取和记录多种mAP指标的功能，包括：
+   - mAP@.50-.95、mAP@.50、mAP@.75
+   - 不同物体尺寸(small, medium, large)的mAP值
+   - 增加了错误处理机制，确保在评估数据不完整时仍能记录基本指标
+
+3. **移除TensorBoard记录**：删除了将FPS记录到TensorBoard的相关代码。
+
+4. **代码结构问题**：stats字典被构建了两次，可能导致mAP指标被覆盖，需要进一步修复。
+
+此次变更主要优化了评估函数的指标记录功能，提高了代码的健壮性，但引入了stats字典重复构建的问题。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 155beae..134b54e 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -285,7 +285,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
+         coco_evaluator.accumulate()
+         coco_evaluator.summarize()
+ 
+-    # Calculate FPS
++    # Calculate FPS - 移除重复计算
+     if forward_pass_times:
+         avg_forward_time = np.mean(forward_pass_times)
+         fps = 1 / avg_forward_time
+@@ -293,19 +293,33 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
+         fps = 0
+     
+     print(f"FPS (batch_size=1): {fps:.2f}")
+-    # Calculate FPS
+-    if forward_pass_times:
+-        avg_forward_time = np.mean(forward_pass_times)
+-        fps = 1 / avg_forward_time
+-    else:
+-        fps = 0
+     
+-    print(f"FPS (batch_size=1): {fps:.2f}")
++    # 确保FPS被正确记录到stats中
++    stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
++    stats['fps'] = fps
+     
+-    # Log FPS to TensorBoard immediately after calculation
+-    if writer and epoch is not None:
+-        writer.add_scalar('eval/FPS', fps, epoch)
+-        print(f"Logged FPS to TensorBoard: {fps:.2f}")
++    # 确保mAP值被正确提取和记录
++    if coco_evaluator is not None:
++        if "bbox" in postprocessors.keys():
++            coco_stats = coco_evaluator.coco_eval["bbox"].stats.tolist()
++            stats["coco_eval_bbox"] = coco_stats
++            
++            # 确保mAP值存在
++            if len(coco_stats) >= 12:  # COCO评估有12个指标
++                stats['mAP@.50-.95'] = float(coco_stats[0])
++                stats['mAP@.50'] = float(coco_stats[1])
++                stats['mAP@.75'] = float(coco_stats[2])
++                stats['mAP_small'] = float(coco_stats[3])
++                stats['mAP_medium'] = float(coco_stats[4])
++                stats['mAP_large'] = float(coco_stats[5])
++                print(f"mAP@.50-.95: {stats['mAP@.50-.95']:.4f}")
++                print(f"mAP@.50: {stats['mAP@.50']:.4f}")
++                print(f"mAP@.75: {stats['mAP@.75']:.4f}")
++            else:
++                print("Warning: coco_eval_bbox stats list is incomplete")
++                # 至少设置基本的mAP值
++                stats['mAP@.50-.95'] = float(coco_stats[0]) if len(coco_stats) > 0 else 0.0
++                stats['mAP@.50'] = float(coco_stats[1]) if len(coco_stats) > 1 else 0.0
+ 
+     stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+     stats['fps'] = fps
+
+--- End Diff ---
+
+53. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+改进了`rfdetr/engine.py`中`evaluate`函数的TensorBoard日志记录功能，主要变更包括：
+
+1. **增强日志记录健壮性**：将条件检查方式改为使用`dict.get()`提供默认值，确保即使指标缺失也能继续记录，避免因指标不存在而跳过记录的情况。
+
+2. **扩展记录指标范围**：
+   - 新增`mAP@.75`指标记录
+   - 添加目标尺寸细分的mAP指标：`mAP_small`、`mAP_medium`、`mAP_large`
+
+3. **改进日志输出**：增加更详细的日志信息，包括记录的具体指标值和确认消息，便于调试和监控记录过程。
+
+4. **代码结构优化**：重构了FPS和mAP指标的记录逻辑，使代码更简洁且功能更全面。
+
+此变更确保了评估过程中的关键性能指标能够被完整记录到TensorBoard，提高了模型性能监控的全面性和可靠性。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 134b54e..3bbec3d 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -337,33 +337,44 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
+                 print("Warning: coco_eval_bbox stats list is too short.")
+ 
+     if writer and epoch is not None:
+-        # Log basic metrics
++        # 确保所有重要指标都被记录到TensorBoard
++        print(f"Logging metrics to TensorBoard for epoch {epoch}")
++        
++        # 基本指标
+         writer.add_scalar('eval/loss', stats['loss'], epoch)
+         if 'class_error' in stats:
+             writer.add_scalar('eval/class_error', stats['class_error'], epoch)
+         
+-        # Log mAP metrics with proper error handling
+-        if 'mAP@.50-.95' in stats:
+-            writer.add_scalar('eval/mAP@.50-.95', stats['mAP@.50-.95'], epoch)
+-            print(f"Logged mAP@.50-.95 to TensorBoard: {stats['mAP@.50-.95']:.4f}")
+-        else:
+-            print("Warning: 'mAP@.50-.95' not found in stats. Skipping TensorBoard log.")
+-            
+-        if 'mAP@.50' in stats:
+-            writer.add_scalar('eval/mAP@.50', stats['mAP@.50'], epoch)
+-            print(f"Logged mAP@.50 to TensorBoard: {stats['mAP@.50']:.4f}")
+-        else:
+-            print("Warning: 'mAP@.50' not found in stats. Skipping TensorBoard log.")
+-
+-        # Log FPS again to ensure it's recorded
+-        if 'fps' in stats:
+-            writer.add_scalar('eval/FPS', stats['fps'], epoch)
+-            print(f"Logged FPS to TensorBoard (from stats): {stats['fps']:.2f}")
+-        else:
+-            print("Warning: 'fps' not found in stats. Skipping TensorBoard log.")
++        # FPS指标 - 确保记录
++        fps_value = stats.get('fps', 0.0)
++        writer.add_scalar('eval/FPS', fps_value, epoch)
++        print(f"Logged FPS to TensorBoard: {fps_value:.2f}")
++        
++        # mAP指标 - 确保记录
++        map_5095 = stats.get('mAP@.50-.95', 0.0)
++        map_50 = stats.get('mAP@.50', 0.0)
++        map_75 = stats.get('mAP@.75', 0.0)
++        
++        writer.add_scalar('eval/mAP@.50-.95', map_5095, epoch)
++        writer.add_scalar('eval/mAP@.50', map_50, epoch)
++        writer.add_scalar('eval/mAP@.75', map_75, epoch)
++        
++        print(f"Logged mAP metrics to TensorBoard:")
++        print(f"  mAP@.50-.95: {map_5095:.4f}")
++        print(f"  mAP@.50: {map_50:.4f}")
++        print(f"  mAP@.75: {map_75:.4f}")
++        
++        # 额外的mAP细分指标
++        if 'mAP_small' in stats:
++            writer.add_scalar('eval/mAP_small', stats['mAP_small'], epoch)
++        if 'mAP_medium' in stats:
++            writer.add_scalar('eval/mAP_medium', stats['mAP_medium'], epoch)
++        if 'mAP_large' in stats:
++            writer.add_scalar('eval/mAP_large', stats['mAP_large'], epoch)
+         
+-        # Ensure TensorBoard writes are flushed
++        # 强制刷新确保写入
+         writer.flush()
++        print("TensorBoard logs flushed successfully")
+ 
+     if coco_evaluator and "segm" in postprocessors.keys():
+         stats["coco_eval_masks"] = coco_evaluator.coco_eval["segm"].stats.tolist()
+
+--- End Diff ---
+
+54. 在文件 'rfdetr\engine.py' 中: ### 变更摘要
+
+修改了 `save_detection_images` 函数中获取类别名称的逻辑，主要变更包括：
+
+1. 添加了关于类别ID处理的注释，指出"类别ID从1开始，需要减1"
+2. 引入了 `adjusted_category_id` 变量来存储类别ID（尽管实际未执行减1操作）
+3. 增加了调试输出，打印类别ID和映射名称，便于排查类别映射问题
+
+此变更似乎是为了解决类别ID与类别名称映射的问题，但注释中提到的减1操作在实际代码中并未实现，可能需要后续完善。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 3bbec3d..feb9f0b 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -514,8 +514,12 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 box = box.cpu().tolist()
+                 category_id = label.item()
+                 
+-                # 获取类别名称
+-                category_name = category_mapping.get(category_id, f"Class_{category_id}")
++                # 获取类别名称 - 注意类别ID从1开始，需要减1
++                adjusted_category_id = category_id
++                category_name = category_mapping.get(adjusted_category_id, f"Class_{adjusted_category_id}")
++                
++                # 调试输出
++                print(f"类别ID: {category_id}, 映射名称: {category_name}")
+                 
+                 # 确保box坐标在图像范围内
+                 box = [
+
+--- End Diff ---
+
+55. 在文件 'rfdetr\engine.py' 中: 这个变更修改了`rfdetr/engine.py`文件中的类别映射方式。具体来说，代码将原来的`category_mapping = {i+1: name for i, name in enumerate(COCO_CLASSES)}`修改为直接使用`category_mapping = COCO_CLASSES`。这表明`COCO_CLASSES`可能已经是一个字典格式，不再需要手动创建从索引到类名的映射。变更简化了代码，避免了不必要的映射创建过程。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index feb9f0b..ea07c33 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -487,7 +487,7 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 if not category_mapping:
+                     try:
+                         from rfdetr.util.coco_classes import COCO_CLASSES
+-                        category_mapping = {i+1: name for i, name in enumerate(COCO_CLASSES)}
++                        category_mapping = COCO_CLASSES
+                         print(f"Using COCO_CLASSES mapping: {len(category_mapping)} classes")
+                     except ImportError:
+                         print("COCO_CLASSES not found, using basic mapping")
+
+--- End Diff ---
+
+56. 在文件 'rfdetr\engine.py' 中: # 变更摘要：改进检测图像保存中的类别名称映射逻辑
+
+## 核心变更
+修改了 `save_detection_images` 函数中的类别名称获取逻辑，使其更符合实际使用的10类数据集类别映射。
+
+## 具体改动
+1. 移除了从 `rfdetr.util.coco_classes` 导入 `COCO_CLASSES` 的尝试，改为直接使用固定的10类数据集映射
+2. 更新了类别映射内容，将原来的通用COCO类别替换为更符合实际数据集的类别：
+   - 新增：rider, bike, motor, traffic sign
+   - 移除：bicycle, motorcycle, airplane, boat
+3. 增加了调试信息，打印类别映射的来源和内容
+4. 将错误提示信息本地化为中文
+
+## 变更目的
+确保检测结果的类别标签与实际使用的数据集类别一致，避免因类别不匹配导致的可视化结果错误。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index ea07c33..224ffd9 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -475,32 +475,37 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+             scaled_pred_boxes = box_ops.box_cxcywh_to_xyxy(pred_boxes)
+             scaled_pred_boxes = scaled_pred_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_pred_boxes.device)
+             
+-            # 改进的类别名称获取逻辑
++            # 改进的类别名称获取逻辑 - 使用实际数据集类别
+             category_mapping = {}
+             try:
+                 # 从coco_dataset获取类别映射
+                 if coco_dataset and hasattr(coco_dataset, 'cats'):
+                     for cat_id, cat_info in coco_dataset.cats.items():
+                         category_mapping[cat_id] = cat_info['name']
++                    print(f"从coco_dataset获取类别: {category_mapping}")
+                 
+-                # 如果coco_dataset没有类别信息，尝试从util获取
++                # 如果coco_dataset没有类别信息，使用10类数据集的映射
+                 if not category_mapping:
+-                    try:
+-                        from rfdetr.util.coco_classes import COCO_CLASSES
+-                        category_mapping = COCO_CLASSES
+-                        print(f"Using COCO_CLASSES mapping: {len(category_mapping)} classes")
+-                    except ImportError:
+-                        print("COCO_CLASSES not found, using basic mapping")
+-                        category_mapping = {
+-                            1: "person", 2: "bicycle", 3: "car", 4: "motorcycle", 5: "airplane",
+-                            6: "bus", 7: "train", 8: "truck", 9: "boat", 10: "traffic light"
+-                        }
++                    # 10类数据集的映射（与您的数据集匹配）
++                    category_mapping = {
++                        1: "person",
++                        2: "rider",
++                        3: "car",
++                        4: "bus",
++                        5: "truck",
++                        6: "bike",
++                        7: "motor",
++                        8: "traffic light",
++                        9: "traffic sign",
++                        10: "train"
++                    }
++                    print(f"使用10类数据集映射: {category_mapping}")
+                 
+             except Exception as e:
+-                print(f"Error getting category mapping: {e}, using fallback")
++                print(f"获取类别映射时出错: {e}, 使用10类回退方案")
+                 category_mapping = {
+-                    1: "person", 2: "bicycle", 3: "car", 4: "motorcycle", 5: "airplane",
+-                    6: "bus", 7: "train", 8: "truck", 9: "boat", 10: "traffic light"
++                    1: "person", 2: "rider", 3: "car", 4: "bus", 5: "truck",
++                    6: "bike", 7: "motor", 8: "traffic light", 9: "traffic sign", 10: "train"
+                 }
+             
+             # 过滤低置信度预测
+
+--- End Diff ---
+
+57. 在文件 'rfdetr\engine.py' 中: # 变更摘要：改进检测图像保存中的类别映射逻辑
+
+本次变更主要针对 `rfdetr/engine.py` 文件中的 `save_detection_images` 函数进行了以下改进：
+
+1. **引入COCO_CLASSES常量**：新增了 `from rfdetr.util.coco_classes import COCO_CLASSES` 导入，使用标准化的COCO类别定义替代硬编码的类别映射。
+
+2. **简化类别映射逻辑**：移除了原有的硬编码10类数据集映射（包括person、rider、car等），改为统一使用COCO_CLASSES作为回退方案，提高了代码的可维护性和一致性。
+
+3. **优化类别ID处理**：删除了不必要的类别ID调整步骤，明确COCO类别ID从1开始且不需要额外调整的逻辑，使代码更加清晰。
+
+4. **改进日志输出**：更新了打印信息，显示使用COCO_CLASSES映射的类别数量，便于调试和问题追踪。
+
+这些变更使类别映射处理更加标准化和健壮，减少了硬编码依赖，提高了代码的可维护性。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 224ffd9..c26e995 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -41,6 +41,7 @@ import os
+ from PIL import Image, ImageDraw, ImageFont
+ import torchvision.transforms.functional as F
+ from rfdetr.util import box_ops
++from rfdetr.util.coco_classes import COCO_CLASSES
+ import numpy as np
+ 
+ def get_autocast_args(args):
+@@ -475,7 +476,7 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+             scaled_pred_boxes = box_ops.box_cxcywh_to_xyxy(pred_boxes)
+             scaled_pred_boxes = scaled_pred_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_pred_boxes.device)
+             
+-            # 改进的类别名称获取逻辑 - 使用实际数据集类别
++            # 改进的类别名称获取逻辑 - 使用COCO_CLASSES
+             category_mapping = {}
+             try:
+                 # 从coco_dataset获取类别映射
+@@ -484,29 +485,14 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                         category_mapping[cat_id] = cat_info['name']
+                     print(f"从coco_dataset获取类别: {category_mapping}")
+                 
+-                # 如果coco_dataset没有类别信息，使用10类数据集的映射
++                # 如果coco_dataset没有类别信息，使用COCO_CLASSES
+                 if not category_mapping:
+-                    # 10类数据集的映射（与您的数据集匹配）
+-                    category_mapping = {
+-                        1: "person",
+-                        2: "rider",
+-                        3: "car",
+-                        4: "bus",
+-                        5: "truck",
+-                        6: "bike",
+-                        7: "motor",
+-                        8: "traffic light",
+-                        9: "traffic sign",
+-                        10: "train"
+-                    }
+-                    print(f"使用10类数据集映射: {category_mapping}")
++                    category_mapping = COCO_CLASSES
++                    print(f"使用COCO_CLASSES映射: {len(category_mapping)}个类别")
+                 
+             except Exception as e:
+-                print(f"获取类别映射时出错: {e}, 使用10类回退方案")
+-                category_mapping = {
+-                    1: "person", 2: "rider", 3: "car", 4: "bus", 5: "truck",
+-                    6: "bike", 7: "motor", 8: "traffic light", 9: "traffic sign", 10: "train"
+-                }
++                print(f"获取类别映射时出错: {e}, 使用COCO_CLASSES回退方案")
++                category_mapping = COCO_CLASSES
+             
+             # 过滤低置信度预测
+             confidence_threshold = 0.3
+@@ -519,9 +505,8 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 box = box.cpu().tolist()
+                 category_id = label.item()
+                 
+-                # 获取类别名称 - 注意类别ID从1开始，需要减1
+-                adjusted_category_id = category_id
+-                category_name = category_mapping.get(adjusted_category_id, f"Class_{adjusted_category_id}")
++                # 获取类别名称 - COCO类别ID从1开始，不需要调整
++                category_name = category_mapping.get(category_id, f"Class_{category_id}")
+                 
+                 # 调试输出
+                 print(f"类别ID: {category_id}, 映射名称: {category_name}")
+
+--- End Diff ---
+
+58. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+修改了`save_detection_images`函数中的类别ID处理逻辑，解决了模型输出类别ID与COCO类别映射不匹配的问题。
+
+### 主要变更：
+1. 增加了对背景类别(ID=0)的处理，直接跳过不显示
+2. 添加了类别ID调整逻辑：当类别ID不在映射中但ID-1存在时，自动将ID减1以匹配正确的类别
+3. 增加了调试输出，显示类别ID调整过程
+
+### 变更原因：
+模型输出包含背景类别(0)且可能使用了num_classes+1的偏移方式，导致类别ID与COCO类别映射不一致。此变更确保了类别名称的正确映射和显示。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index c26e995..6c33fe3 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -505,8 +505,17 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 box = box.cpu().tolist()
+                 category_id = label.item()
+                 
+-                # 获取类别名称 - COCO类别ID从1开始，不需要调整
+-                category_name = category_mapping.get(category_id, f"Class_{category_id}")
++                # 获取类别名称 - 模型输出包含背景类别(0)，但COCO_CLASSES从1开始
++                # 如果类别ID为0，表示背景，不显示
++                # 如果类别ID大于COCO_CLASSES的最大ID，尝试减去1（因为模型可能使用了num_classes+1）
++                if category_id == 0:
++                    continue  # 跳过背景类别
++                elif category_id not in category_mapping and category_id - 1 in category_mapping:
++                    adjusted_category_id = category_id - 1
++                    category_name = category_mapping.get(adjusted_category_id, f"Class_{adjusted_category_id}")
++                    print(f"调整类别ID: {category_id} -> {adjusted_category_id}, 类别名称: {category_name}")
++                else:
++                    category_name = category_mapping.get(category_id, f"Class_{category_id}")
+                 
+                 # 调试输出
+                 print(f"类别ID: {category_id}, 映射名称: {category_name}")
+
+--- End Diff ---
