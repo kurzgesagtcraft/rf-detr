@@ -3100,3 +3100,580 @@ index 6c85e2d..111b6ad 100644
              if args.pretrain_exclude_keys is not None:
 
 --- End Diff ---
+
+96. 在文件 'rfdetr\engine.py' 中: 变更摘要：修改了检测图像保存逻辑，在文件名中增加了图像ID标识，以防止不同图像在保存时被覆盖。具体变更是在保存路径的文件名中添加了`_image_{image_id}`后缀，确保每个保存的图像都有唯一的文件名。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index bd64e2a..5caf723 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -633,8 +633,8 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+         print("Warning: `criterion` not provided to `save_detection_images`. Cannot determine which boxes are used for loss. Skipping image save.")
+         return
+ 
+-    # Save the modified image
+-    save_path = os.path.join(img_output_dir, f"epoch_{epoch}.png")
++    # Save the modified image with unique filename to prevent overwriting
++    save_path = os.path.join(img_output_dir, f"epoch_{epoch}_image_{image_id}.png")
+     img.save(save_path)
+     print(f"Image saved to {save_path} with {drawn_boxes} labeled boxes")
+     sys.stdout.flush()  # Ensure immediate output
+
+--- End Diff ---
+
+97. 在文件 'rfdetr\main.py' 中: 将 rfdetr/main.py 中的训练轮次（epochs）参数默认值从 12 增加到 100，以延长模型训练时间，可能旨在提高模型性能或适应更复杂的训练需求。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index 111b6ad..25f568f 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -582,7 +582,7 @@ def populate_args(
+     lr_encoder=1.5e-4,
+     batch_size=2,
+     weight_decay=1e-4,
+-    epochs=12,
++    epochs=100,
+     lr_drop=11,
+     clip_max_norm=0.1,
+     lr_vit_layer_decay=0.8,
+
+--- End Diff ---
+
+98. 在文件 'rfdetr\engine.py' 中: # 代码变更摘要
+
+本次变更主要针对RFDetR训练过程中的可视化功能进行了优化，具体变更包括：
+
+1. **可视化频率调整**：
+   - 原代码：每5个epoch且每100个迭代步骤保存一次检测结果图像
+   - 新代码：每个epoch只处理第一个batch的第一张图片进行可视化
+
+2. **代表性图片选择机制**：
+   - 新增`representative_image_ids`参数支持，允许指定特定的图片ID进行可视化
+   - 如果未设置`representative_image_ids`，则默认保存每个epoch第一个batch的第一张图片
+   - 如果设置了该参数，则只保存ID在指定列表中的图片
+
+3. **保存文件命名简化**：
+   - 原代码：文件名包含epoch和image_id（格式：`epoch_{epoch}_image_{image_id}.png`）
+   - 新代码：文件名只包含epoch（格式：`epoch_{epoch}.png`），简化了文件命名
+
+这些变更使训练过程的可视化更加精准和有针对性，减少了不必要的图像保存，同时通过代表性图片机制提高了可视化的有效性。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 5caf723..c270d15 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -133,11 +133,17 @@ def train_one_epoch(
+                 
+                 # 新增的可视化步骤
+                 # Save images periodically to check detection results
+-                if epoch % 5 == 0 and data_iter_step % 100 == 0:
+-                    try:
+-                        save_detection_images(outputs, new_targets, new_samples, epoch, coco_dataset=coco_dataset, criterion=criterion)
+-                    except Exception as e:
+-                        print(f"Error saving detection image in epoch {epoch}: {e}")
++                # 选择一些代表性的图片在每个epoch都保存其预测结果
++                if data_iter_step == 0:  # 只处理每个epoch的第一个batch的第一张图片
++                    image_id = new_targets[0]['image_id'].item()
++                    # 简化条件检查，确保每个epoch都能保存代表性图片
++                    # 如果没有设置representative_image_ids，则保存所有第一batch的第一张图片
++                    # 如果设置了representative_image_ids，则只保存其中的图片
++                    if representative_image_ids is None or image_id in representative_image_ids:
++                        try:
++                            save_detection_images(outputs, new_targets, new_samples, epoch, coco_dataset=coco_dataset, criterion=criterion)
++                        except Exception as e:
++                            print(f"Error saving detection image in epoch {epoch}: {e}")
+ 
+                 loss_dict = criterion(outputs, new_targets)
+                 weight_dict = criterion.weight_dict
+@@ -634,7 +640,7 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+         return
+ 
+     # Save the modified image with unique filename to prevent overwriting
+-    save_path = os.path.join(img_output_dir, f"epoch_{epoch}_image_{image_id}.png")
++    save_path = os.path.join(img_output_dir, f"epoch_{epoch}.png")
+     img.save(save_path)
+     print(f"Image saved to {save_path} with {drawn_boxes} labeled boxes")
+     sys.stdout.flush()  # Ensure immediate output
+
+--- End Diff ---
+
+99. 在文件 'rfdetr\engine.py' 中: ### 变更摘要
+
+在 `rfdetr/engine.py` 文件的 `train_one_epoch` 函数中，针对保存代表性图片预测结果的功能进行了以下改进：
+
+1. **简化了注释**：将关于条件检查的注释简化为更清晰的描述，强调确保每个epoch都能保存代表性图片。
+
+2. **增强了错误处理**：在保存检测图片的异常处理块中，添加了 `traceback` 模块的导入和 `traceback.print_exc()` 调用，以便在保存图片出错时打印详细的错误堆栈信息，有助于问题诊断和调试。
+
+这些变更提高了代码的可读性和错误诊断能力，使得在训练过程中保存代表性图片时出现的问题更容易被定位和解决。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index c270d15..5510222 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -136,7 +136,7 @@ def train_one_epoch(
+                 # 选择一些代表性的图片在每个epoch都保存其预测结果
+                 if data_iter_step == 0:  # 只处理每个epoch的第一个batch的第一张图片
+                     image_id = new_targets[0]['image_id'].item()
+-                    # 简化条件检查，确保每个epoch都能保存代表性图片
++                    # 确保每个epoch都能保存代表性图片
+                     # 如果没有设置representative_image_ids，则保存所有第一batch的第一张图片
+                     # 如果设置了representative_image_ids，则只保存其中的图片
+                     if representative_image_ids is None or image_id in representative_image_ids:
+@@ -144,6 +144,8 @@ def train_one_epoch(
+                             save_detection_images(outputs, new_targets, new_samples, epoch, coco_dataset=coco_dataset, criterion=criterion)
+                         except Exception as e:
+                             print(f"Error saving detection image in epoch {epoch}: {e}")
++                            import traceback
++                            traceback.print_exc()  # 打印详细的错误信息
+ 
+                 loss_dict = criterion(outputs, new_targets)
+                 weight_dict = criterion.weight_dict
+
+--- End Diff ---
+
+100. 在文件 'rfdetr\engine.py' 中: 在 `rfdetr/engine.py` 文件的 `train_one_epoch` 函数中增加了调试日志功能，用于跟踪检测图像的保存过程。具体变更包括：
+
+1. 在尝试保存检测图像前添加了日志输出，显示当前训练周期和图像ID
+2. 在成功保存检测图像后添加了确认日志
+
+这些变更有助于开发者更好地监控和诊断图像保存过程中可能出现的问题，提高了代码的可调试性。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 5510222..fde60a4 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -140,8 +140,10 @@ def train_one_epoch(
+                     # 如果没有设置representative_image_ids，则保存所有第一batch的第一张图片
+                     # 如果设置了representative_image_ids，则只保存其中的图片
+                     if representative_image_ids is None or image_id in representative_image_ids:
++                        print(f"Attempting to save detection image for epoch {epoch}, image_id: {image_id}")
+                         try:
+                             save_detection_images(outputs, new_targets, new_samples, epoch, coco_dataset=coco_dataset, criterion=criterion)
++                            print(f"Successfully saved detection image for epoch {epoch}")
+                         except Exception as e:
+                             print(f"Error saving detection image in epoch {epoch}: {e}")
+                             import traceback
+
+--- End Diff ---
+
+101. 在文件 'rfdetr\engine.py' 中: 本次变更主要对 `save_detection_images` 函数进行了增强，添加了调试信息和错误处理机制。具体变更包括：
+
+1. 添加了详细的调试打印语句，包括 epoch 值、处理的 image_id、图像文件名和图像尺寸等信息，便于问题排查。
+
+2. 增加了对 `coco_dataset` 的有效性检查，当其为 None 时会打印警告并提前返回，避免后续操作出现异常。
+
+3. 使用 try-except 块包装图像信息获取代码，捕获可能的异常并打印错误信息，增强了函数的健壮性。
+
+4. 添加了原始图像路径的打印输出，帮助定位图像文件查找问题。
+
+这些变更提高了函数的可靠性和可调试性，便于在图像保存过程中定位和解决问题。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 5f5b251..416e676 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -406,14 +406,29 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+     Saves images by drawing matched predicted boxes on top of the original images
+     which already contain ground truth boxes.
+     """
++    print(f"save_detection_images called with epoch: {epoch}")
++    
+     # Get image_id and filename
+     target = targets[0]
+     image_id = target['image_id'].item()
+-    img_info = coco_dataset.loadImgs(image_id)[0]
+-    img_filename = img_info['file_name']
++    print(f"Processing image_id: {image_id}")
++    
++    # Check if coco_dataset is valid
++    if coco_dataset is None:
++        print("Warning: coco_dataset is None")
++        return
++    
++    try:
++        img_info = coco_dataset.loadImgs(image_id)[0]
++        img_filename = img_info['file_name']
++        print(f"Image filename: {img_filename}")
++    except Exception as e:
++        print(f"Error getting image info: {e}")
++        return
+ 
+     # Load the original image from the visual dataset (which has GT boxes)
+     original_image_path = os.path.join("dataset/visual/train", img_filename)
++    print(f"Looking for original image at: {original_image_path}")
+     if not os.path.exists(original_image_path):
+         # If not found, try to reconstruct from the tensor
+         print(f"Warning: Original image not found at {original_image_path}. Reconstructing from tensor.")
+@@ -463,6 +478,7 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+     # Get original size for scaling boxes
+     orig_size = target['orig_size']
+     img_h, img_w = orig_size.cpu().numpy()
++    print(f"Image dimensions: {img_w}x{img_h}")
+ 
+     # Prepare output directory
+     img_name_without_ext = os.path.splitext(img_filename)[0]
+
+--- End Diff ---
+
+102. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+在 `rfdetr/engine.py` 文件的 `save_detection_images` 函数中增强了图像保存的错误处理机制。具体变更包括：
+
+1. 添加了保存路径的预打印信息，显示尝试保存图像的位置
+2. 将原有的图像保存操作包装在 try-except 块中，增加了异常捕获能力
+3. 当图像保存失败时，现在会打印详细的错误信息和完整的堆栈跟踪，便于调试
+
+此变更提高了代码的健壮性，使得在图像保存过程中出现问题时能够提供更详细的错误信息，有助于快速定位和解决问题。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 416e676..fcd8690 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -662,6 +662,12 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+ 
+     # Save the modified image with unique filename to prevent overwriting
+     save_path = os.path.join(img_output_dir, f"epoch_{epoch}.png")
+-    img.save(save_path)
+-    print(f"Image saved to {save_path} with {drawn_boxes} labeled boxes")
++    print(f"Attempting to save image to: {save_path}")
++    try:
++        img.save(save_path)
++        print(f"Image saved to {save_path} with {drawn_boxes} labeled boxes")
++    except Exception as e:
++        print(f"Error saving image to {save_path}: {e}")
++        import traceback
++        traceback.print_exc()
+     sys.stdout.flush()  # Ensure immediate output
+
+--- End Diff ---
+
+103. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+对 `rfdetr/engine.py` 中的 `save_detection_images` 函数进行了健壮性改进，主要增强了处理 coco_dataset 异常情况的能力。
+
+### 核心变更：
+1. **移除了提前返回机制**：当 coco_dataset 为 None 或加载图像信息失败时，不再直接终止函数执行。
+2. **增加了回退处理机制**：在无法从 coco_dataset 获取图像文件名时，使用标准的COCO文件名格式（`{image_id:012d}.jpg`）作为回退方案。
+3. **优化了错误处理流程**：将错误信息打印与回退处理结合，确保函数在任何情况下都能继续执行。
+
+### 变更目的：
+提高函数在面对数据集访问问题时的容错能力，确保图像保存功能即使在数据集信息不完整的情况下也能正常工作，增强了系统的稳定性和可靠性。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index fcd8690..d19a26c 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -415,17 +415,19 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+     
+     # Check if coco_dataset is valid
+     if coco_dataset is None:
+-        print("Warning: coco_dataset is None")
+-        return
++        print("Warning: coco_dataset is None, using fallback method")
++        # 使用一个简单的回退方法
++        img_filename = f"{image_id:012d}.jpg"  # COCO数据集的标准文件名格式
++    else:
++        try:
++            img_info = coco_dataset.loadImgs(image_id)[0]
++            img_filename = img_info['file_name']
++            print(f"Image filename: {img_filename}")
++        except Exception as e:
++            print(f"Error getting image info: {e}")
++            # 回退到标准的COCO文件名格式
++            img_filename = f"{image_id:012d}.jpg"
+     
+-    try:
+-        img_info = coco_dataset.loadImgs(image_id)[0]
+-        img_filename = img_info['file_name']
+-        print(f"Image filename: {img_filename}")
+-    except Exception as e:
+-        print(f"Error getting image info: {e}")
+-        return
+-
+     # Load the original image from the visual dataset (which has GT boxes)
+     original_image_path = os.path.join("dataset/visual/train", img_filename)
+     print(f"Looking for original image at: {original_image_path}")
+
+--- End Diff ---
+
+104. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+在 `rfdetr/engine.py` 文件的 `train_one_epoch` 函数中添加了一行调试打印语句，用于输出训练过程中的进度信息。具体变更是在训练循环开始处添加了打印当前周期(epoch)和数据迭代步骤(data_iter_step)的代码，这有助于开发者跟踪和监控模型训练的进度状态。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index d19a26c..1d4b415 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -99,6 +99,7 @@ def train_one_epoch(
+     for data_iter_step, (samples, targets) in enumerate(
+         metric_logger.log_every(data_loader, print_freq, header)
+     ):
++        print(f"Processing epoch {epoch}, data_iter_step {data_iter_step}")
+         it = start_steps + data_iter_step
+         callback_dict = {
+             "step": it,
+
+--- End Diff ---
+
+105. 在文件 'rfdetr\engine.py' 中: # 变更摘要：增强图像路径调试功能
+
+在 `rfdetr/engine.py` 文件的 `save_detection_images` 函数中，添加了目录存在性检查和诊断信息输出功能。变更主要在尝试加载原始图像之前，增加了对 `dataset/visual/train` 目录的详细检查逻辑：
+
+1. 检查视觉训练目录是否存在，不存在时输出警告并列出 dataset 目录内容
+2. 目录存在时，输出确认信息并显示目录中的文件数量及前几个文件名
+3. 这些诊断信息有助于在原始图像路径不存在时，快速定位问题原因
+
+此变更提升了调试能力，便于开发者排查图像加载失败的问题。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 1d4b415..c259ebd 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -432,6 +432,26 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+     # Load the original image from the visual dataset (which has GT boxes)
+     original_image_path = os.path.join("dataset/visual/train", img_filename)
+     print(f"Looking for original image at: {original_image_path}")
++    
++    # 检查目录是否存在
++    visual_train_dir = "dataset/visual/train"
++    if not os.path.exists(visual_train_dir):
++        print(f"Warning: Visual train directory does not exist: {visual_train_dir}")
++        # 列出dataset目录的内容
++        if os.path.exists("dataset"):
++            print("Contents of dataset directory:")
++            for item in os.listdir("dataset"):
++                print(f"  {item}")
++        else:
++            print("Dataset directory does not exist")
++    else:
++        print(f"Visual train directory exists: {visual_train_dir}")
++        # 列出目录中的文件数量
++        files = os.listdir(visual_train_dir)
++        print(f"Number of files in visual train directory: {len(files)}")
++        if len(files) > 0:
++            print(f"First few files: {files[:5]}")
++    
+     if not os.path.exists(original_image_path):
+         # If not found, try to reconstruct from the tensor
+         print(f"Warning: Original image not found at {original_image_path}. Reconstructing from tensor.")
+
+--- End Diff ---
+
+106. 在文件 'rfdetr\engine.py' 中: ### 变更摘要
+
+在`rfdetr/engine.py`文件的`save_detection_images`函数中添加了输出目录存在性检查和创建逻辑。具体变更包括：
+
+1. 在准备输出目录的阶段，增加了检查`output_dir`是否存在的代码
+2. 如果目录不存在，则自动创建该目录并打印确认信息
+3. 这一修改增强了函数的健壮性，防止因输出目录不存在而导致的文件保存错误
+
+此变更确保了在保存检测结果图像时，所需的目录结构会自动创建，提高了代码的可靠性和用户体验。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index c259ebd..6c9cc99 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -504,6 +504,11 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+     print(f"Image dimensions: {img_w}x{img_h}")
+ 
+     # Prepare output directory
++    # 确保输出目录存在
++    if not os.path.exists(output_dir):
++        os.makedirs(output_dir)
++        print(f"Created output directory: {output_dir}")
++    
+     img_name_without_ext = os.path.splitext(img_filename)[0]
+     img_output_dir = os.path.join(output_dir, img_name_without_ext)
+     os.makedirs(img_output_dir, exist_ok=True)
+
+--- End Diff ---
+
+107. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+在`rfdetr/engine.py`文件中增加了调试日志输出，用于跟踪训练过程中的图像保存可视化功能。具体变更包括：
+
+1. 在每个epoch开始时（第一个batch处理前）添加提示信息，表明将尝试保存可视化图像。
+
+2. 在代表性图像保存逻辑部分增加详细调试输出：
+   - 打印当前epoch和图像ID信息
+   - 检查并显示`representative_image_ids`是否为None
+   - 若`representative_image_ids`不为空，检查当前图像ID是否在代表性图像列表中
+   - 显示代表性图像列表中的前几个ID（最多10个）
+
+这些变更旨在提高代码的可调试性，帮助开发者更好地理解图像保存决策过程，便于排查相关问题。变更不改变原有功能逻辑，仅增加日志输出。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 6c9cc99..895319c 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -100,6 +100,10 @@ def train_one_epoch(
+         metric_logger.log_every(data_loader, print_freq, header)
+     ):
+         print(f"Processing epoch {epoch}, data_iter_step {data_iter_step}")
++        # 在每个epoch开始时检查是否应该保存图像
++        if data_iter_step == 0:
++            print(f"First batch of epoch {epoch}, will attempt to save visualization")
++        
+         it = start_steps + data_iter_step
+         callback_dict = {
+             "step": it,
+@@ -137,6 +141,13 @@ def train_one_epoch(
+                 # 选择一些代表性的图片在每个epoch都保存其预测结果
+                 if data_iter_step == 0:  # 只处理每个epoch的第一个batch的第一张图片
+                     image_id = new_targets[0]['image_id'].item()
++                    print(f"Checking image saving condition for epoch {epoch}, image_id: {image_id}")
++                    print(f"representative_image_ids is None: {representative_image_ids is None}")
++                    if representative_image_ids is not None:
++                        print(f"image_id {image_id} in representative_image_ids: {image_id in representative_image_ids}")
++                        if len(representative_image_ids) > 0:
++                            print(f"First few representative_image_ids: {list(representative_image_ids)[:10]}")
++                    
+                     # 确保每个epoch都能保存代表性图片
+                     # 如果没有设置representative_image_ids，则保存所有第一batch的第一张图片
+                     # 如果设置了representative_image_ids，则只保存其中的图片
+
+--- End Diff ---
+
+108. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+在`rfdetr/engine.py`文件的`train_one_epoch`函数中增加了调试信息输出功能。具体变更包括：
+
+1. 添加了训练开始时的epoch信息打印
+2. 保留了原有的数据加载器长度打印
+3. 新增了对`representative_image_ids`参数的完整打印
+4. 当`representative_image_ids`不为空时，额外打印前10个代表性图像ID
+
+这些变更旨在增强训练过程的可观察性，便于调试和监控训练过程中的关键参数状态。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 895319c..c4a3490 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -95,7 +95,11 @@ def train_one_epoch(
+     optimizer.zero_grad()
+     assert batch_size % args.grad_accum_steps == 0
+     sub_batch_size = batch_size // args.grad_accum_steps
+-    print("LENGTH OF DATA LOADER:", len(data_loader))
++    print(f"Starting train_one_epoch for epoch {epoch}")
++    print(f"LENGTH OF DATA LOADER:", len(data_loader))
++    print(f"representative_image_ids: {representative_image_ids}")
++    if representative_image_ids is not None and len(representative_image_ids) > 0:
++        print(f"First few representative_image_ids: {list(representative_image_ids)[:10]}")
+     for data_iter_step, (samples, targets) in enumerate(
+         metric_logger.log_every(data_loader, print_freq, header)
+     ):
+
+--- End Diff ---
+
+109. 在文件 'rfdetr\engine.py' 中: 本次变更修改了训练过程中保存代表性图片的逻辑。核心变化是从条件性保存（仅当图片ID在representative_image_ids中时才保存）改为无条件保存每个epoch的第一张图片。这一修改确保了无论是否设置了representative_image_ids，每个epoch都能看到检测结果的可视化输出，提高了训练过程的可观察性。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index c4a3490..9087c77 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -152,18 +152,18 @@ def train_one_epoch(
+                         if len(representative_image_ids) > 0:
+                             print(f"First few representative_image_ids: {list(representative_image_ids)[:10]}")
+                     
+-                    # 确保每个epoch都能保存代表性图片
++                    # 确保每个epoch都能保存第一张图片，而不依赖于representative_image_ids
+                     # 如果没有设置representative_image_ids，则保存所有第一batch的第一张图片
+                     # 如果设置了representative_image_ids，则只保存其中的图片
+-                    if representative_image_ids is None or image_id in representative_image_ids:
+-                        print(f"Attempting to save detection image for epoch {epoch}, image_id: {image_id}")
+-                        try:
+-                            save_detection_images(outputs, new_targets, new_samples, epoch, coco_dataset=coco_dataset, criterion=criterion)
+-                            print(f"Successfully saved detection image for epoch {epoch}")
+-                        except Exception as e:
+-                            print(f"Error saving detection image in epoch {epoch}: {e}")
+-                            import traceback
+-                            traceback.print_exc()  # 打印详细的错误信息
++                    # 但为了确保能看到结果，我们总是保存每个epoch的第一张图片
++                    print(f"Attempting to save detection image for epoch {epoch}, image_id: {image_id}")
++                    try:
++                        save_detection_images(outputs, new_targets, new_samples, epoch, coco_dataset=coco_dataset, criterion=criterion)
++                        print(f"Successfully saved detection image for epoch {epoch}")
++                    except Exception as e:
++                        print(f"Error saving detection image in epoch {epoch}: {e}")
++                        import traceback
++                        traceback.print_exc()  # 打印详细的错误信息
+ 
+                 loss_dict = criterion(outputs, new_targets)
+                 weight_dict = criterion.weight_dict
+
+--- End Diff ---
+
+110. 在文件 'rfdetr\engine.py' 中: # 变更摘要：优化训练过程中的图像可视化保存逻辑
+
+本次变更修改了`rfdetr/engine.py`文件中的`train_one_epoch`函数，主要优化了训练过程中保存检测图像的可视化逻辑：
+
+## 核心变更
+1. **保存策略调整**：从只保存每个epoch第一个batch的第一张图片，改为检查并保存代表性图片集合中的图片
+2. **循环处理机制**：新增循环遍历当前batch中的所有图片，检查其image_id是否在representative_image_ids集合中
+3. **单图像处理优化**：为每个待保存的图像创建单独的targets和samples对象，避免处理整个batch的数据
+
+## 具体改动
+- 移除了仅处理第一个batch第一张图片的限制条件
+- 增加了对representative_image_ids集合的检查逻辑
+- 优化了图像保存的数据处理方式，使用NestedTensor处理单张图像而非整个batch
+- 增加了保存成功后的break语句，确保每个epoch只保存一张代表性图像
+
+## 变更目的
+提高训练过程中图像可视化的灵活性和针对性，使开发者能够更精确地监控特定图像在训练过程中的检测效果变化。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 9087c77..756f86e 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -143,8 +143,9 @@ def train_one_epoch(
+                 # 新增的可视化步骤
+                 # Save images periodically to check detection results
+                 # 选择一些代表性的图片在每个epoch都保存其预测结果
+-                if data_iter_step == 0:  # 只处理每个epoch的第一个batch的第一张图片
+-                    image_id = new_targets[0]['image_id'].item()
++                # 检查当前batch中的图像是否在representative_image_ids中
++                for i, target in enumerate(new_targets):
++                    image_id = target['image_id'].item()
+                     print(f"Checking image saving condition for epoch {epoch}, image_id: {image_id}")
+                     print(f"representative_image_ids is None: {representative_image_ids is None}")
+                     if representative_image_ids is not None:
+@@ -152,18 +153,24 @@ def train_one_epoch(
+                         if len(representative_image_ids) > 0:
+                             print(f"First few representative_image_ids: {list(representative_image_ids)[:10]}")
+                     
+-                    # 确保每个epoch都能保存第一张图片，而不依赖于representative_image_ids
+-                    # 如果没有设置representative_image_ids，则保存所有第一batch的第一张图片
+-                    # 如果设置了representative_image_ids，则只保存其中的图片
+-                    # 但为了确保能看到结果，我们总是保存每个epoch的第一张图片
+-                    print(f"Attempting to save detection image for epoch {epoch}, image_id: {image_id}")
+-                    try:
+-                        save_detection_images(outputs, new_targets, new_samples, epoch, coco_dataset=coco_dataset, criterion=criterion)
+-                        print(f"Successfully saved detection image for epoch {epoch}")
+-                    except Exception as e:
+-                        print(f"Error saving detection image in epoch {epoch}: {e}")
+-                        import traceback
+-                        traceback.print_exc()  # 打印详细的错误信息
++                    # 如果图像在representative_image_ids中，则保存它
++                    if representative_image_ids is None or image_id in representative_image_ids:
++                        print(f"Attempting to save detection image for epoch {epoch}, image_id: {image_id}")
++                        try:
++                            # 为当前目标创建新的targets和samples列表
++                            single_target = [target]
++                            single_sample_tensors = new_samples.tensors[i:i+1]
++                            single_sample_mask = new_samples.mask[i:i+1]
++                            single_sample = NestedTensor(single_sample_tensors, single_sample_mask)
++                            
++                            save_detection_images(outputs, single_target, single_sample, epoch, coco_dataset=coco_dataset, criterion=criterion)
++                            print(f"Successfully saved detection image for epoch {epoch}, image_id: {image_id}")
++                            # 一旦找到并保存了一个代表性图像，就跳出循环
++                            break
++                        except Exception as e:
++                            print(f"Error saving detection image in epoch {epoch}, image_id {image_id}: {e}")
++                            import traceback
++                            traceback.print_exc()  # 打印详细的错误信息
+ 
+                 loss_dict = criterion(outputs, new_targets)
+                 weight_dict = criterion.weight_dict
+
+--- End Diff ---
