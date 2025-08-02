@@ -1936,3 +1936,1167 @@ index c26e995..6c33fe3 100644
                  print(f"类别ID: {category_id}, 映射名称: {category_name}")
 
 --- End Diff ---
+
+59. 在文件 'result\782e5511-8eaa78ed\epoch_0.png' 中: ## 变更摘要
+
+删除了位于`result/782e5511-8eaa78ed/`目录下的`epoch_0.png`图片文件。该文件是二进制图像文件，从文件名推测可能是机器学习模型训练过程中第0个epoch的可视化结果。此次变更将该文件从代码库中完全移除。
+--- Git Diff ---
+diff --git a/result/782e5511-8eaa78ed/epoch_0.png b/result/782e5511-8eaa78ed/epoch_0.png
+deleted file mode 100644
+index 3f1438c..0000000
+Binary files a/result/782e5511-8eaa78ed/epoch_0.png and /dev/null differ
+
+--- End Diff ---
+
+60. 在文件 'result\26089727-91d1e3f2\epoch_0.png' 中: 删除了训练结果目录中的epoch_0.png图像文件（位于result/26089727-91d1e3f2/目录下）。该文件是机器学习训练过程中第0个epoch的可视化结果。
+--- Git Diff ---
+diff --git a/result/26089727-91d1e3f2/epoch_0.png b/result/26089727-91d1e3f2/epoch_0.png
+deleted file mode 100644
+index 9040022..0000000
+Binary files a/result/26089727-91d1e3f2/epoch_0.png and /dev/null differ
+
+--- End Diff ---
+
+61. 在文件 'result\27af350c-59cf32cc\epoch_0.png' 中: 删除了位于result/27af350c-59cf32cc/目录下的epoch_0.png图片文件。该文件可能是某个模型训练过程中的第0轮(epoch)结果可视化图像。
+--- Git Diff ---
+diff --git a/result/27af350c-59cf32cc/epoch_0.png b/result/27af350c-59cf32cc/epoch_0.png
+deleted file mode 100644
+index 1b2c925..0000000
+Binary files a/result/27af350c-59cf32cc/epoch_0.png and /dev/null differ
+
+--- End Diff ---
+
+
+
+
+
+62. 在文件 'rfdetr\engine.py' 中: # 变更摘要：优化检测图像可视化功能
+
+本次变更主要优化了`save_detection_images`函数的检测可视化逻辑，核心修改包括：
+
+1. **降低置信度阈值**：从0.3降至0.1，使更多预测框能够显示在可视化结果中，特别有助于推理阶段的可视化分析。
+
+2. **区分高低置信度预测**：
+   - 不再直接过滤低置信度预测，而是保留并标记
+   - 对低置信度(<0.3)预测框使用橙色(高置信度使用红色)
+   - 低置信度预测框线宽较细(2px vs 3px)
+   - 在标签文本中添加"(low)"标记
+
+3. **增强调试信息**：在打印输出中增加置信度值显示，便于调试分析。
+
+4. **改进文本显示**：为低置信度预测使用不同的文本颜色方案，提高可视化区分度。
+
+这些变更使得检测结果可视化更加全面和直观，便于开发者分析模型性能，特别是对低置信度预测的观察。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 6c33fe3..78dffd7 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -495,13 +495,14 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 category_mapping = COCO_CLASSES
+             
+             # 过滤低置信度预测
+-            confidence_threshold = 0.3
++            # 降低阈值以便显示更多预测框，特别是对于推理可视化
++            confidence_threshold = 0.1
+             
+             for box, label, score in zip(scaled_pred_boxes, labels, scores):
+                 score_value = score.item()
+-                if score_value < confidence_threshold:
+-                    continue
+-                    
++                # 即使置信度较低也显示，但可以添加一个标记
++                is_low_confidence = score_value < 0.3
++                
+                 box = box.cpu().tolist()
+                 category_id = label.item()
+                 
+@@ -518,7 +519,7 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                     category_name = category_mapping.get(category_id, f"Class_{category_id}")
+                 
+                 # 调试输出
+-                print(f"类别ID: {category_id}, 映射名称: {category_name}")
++                print(f"类别ID: {category_id}, 映射名称: {category_name}, 置信度: {score_value:.3f}")
+                 
+                 # 确保box坐标在图像范围内
+                 box = [
+@@ -528,11 +529,16 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                     max(0, min(box[3], img_h))
+                 ]
+                 
++                # 对于低置信度的预测框，使用不同的颜色
++                box_color = "orange" if is_low_confidence else "red"
++                box_width = 2 if is_low_confidence else 3
++                
+                 # 绘制边界框
+-                draw.rectangle(box, outline="red", width=3)
++                draw.rectangle(box, outline=box_color, width=box_width)
+                 
+                 # 准备文本
+-                text = f"{category_name}: {score_value:.2f}"
++                confidence_text = f"{score_value:.2f}" + (" (low)" if is_low_confidence else "")
++                text = f"{category_name}: {confidence_text}"
+                 
+                 # 计算文本位置 - 确保在图像内
+                 text_x = max(2, min(box[0] + 2, img_w - 100))
+@@ -544,6 +550,10 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 
+                 text_position = (text_x, text_y)
+                 
++                # 对于低置信度的预测框，使用不同的文本颜色
++                text_color = "orange" if is_low_confidence else "white"
++                bg_color = "red"  # 保持背景色一致
++                
+                 # 绘制带背景的文本
+                 try:
+                     # 获取文本边界框
+@@ -574,17 +584,17 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                     bg_box[3] = min(img_h, bg_box[3])
+                     
+                     # 绘制背景
+-                    draw.rectangle(bg_box, fill="red")
++                    draw.rectangle(bg_box, fill=bg_color)
+                     
+                     # 绘制文本
+-                    draw.text(text_position, text, fill="white", font=font)
++                    draw.text(text_position, text, fill=text_color, font=font)
+                     drawn_boxes += 1
+                     
+                 except Exception as e:
+                     print(f"Error drawing text for {category_name}: {e}")
+                     # 最后的备选：直接绘制文本
+                     try:
+-                        draw.text(text_position, text, fill="red", font=font)
++                        draw.text(text_position, text, fill=box_color, font=font)
+                         drawn_boxes += 1
+                     except:
+                         pass
+
+--- End Diff ---
+
+63. 在文件 'rfdetr\models\lwdetr.py' 中: ## 变更摘要
+
+修改了LWDETR模型中关于参考点嵌入和查询特征权重的使用逻辑。主要变更内容：
+
+1. **调整条件判断**：将原来的`if self.training`条件扩展为`if self.training or not self.two_stage`，使非two_stage模型在推理时也能使用全部权重。
+
+2. **优化推理策略**：非two_stage模型现在在推理时使用所有group的权重，以提高检测效果；而two_stage模型在推理时仍保持原有策略，仅使用部分权重（前self.num_queries个）。
+
+3. **增加注释说明**：添加了中文注释，明确解释了变更目的——在推理时使用所有group以提高检测效果，同时保持评估时的一致性。
+
+此变更旨在提升非two_stage模型在推理阶段的检测性能，同时保持two_stage模型的原有行为不变。
+--- Git Diff ---
+diff --git a/rfdetr/models/lwdetr.py b/rfdetr/models/lwdetr.py
+index 00c6e2f..8f330e5 100644
+--- a/rfdetr/models/lwdetr.py
++++ b/rfdetr/models/lwdetr.py
+@@ -153,11 +153,13 @@ class LWDETR(nn.Module):
+             masks.append(mask)
+             assert mask is not None
+ 
+-        if self.training:
++        # 在推理时也使用所有group，以提高检测效果
++        # 但在评估时仍然只使用一个group以保持一致性
++        if self.training or not self.two_stage:
+             refpoint_embed_weight = self.refpoint_embed.weight
+             query_feat_weight = self.query_feat.weight
+         else:
+-            # only use one group in inference
++            # only use one group in inference for two_stage models
+             refpoint_embed_weight = self.refpoint_embed.weight[:self.num_queries]
+             query_feat_weight = self.query_feat.weight[:self.num_queries]
+ 
+
+--- End Diff ---
+
+64. 在文件 'rfdetr\models\lwdetr.py' 中: 本次变更修改了 RFDetr 模型中的后处理模块 (PostProcess)，主要调整了预测框的选择策略。具体变更包括：
+
+1. 增加了选择的预测框数量，从原来的 `self.num_select` 调整为 `min(self.num_select * 2, out_logits.shape[1])`，即增加一倍但不超过总查询数。
+2. 添加了注释说明变更目的是为了在可视化时能够显示更多结果。
+
+这一变更使得模型在推理阶段会选择更多的预测框进行后续处理，有助于在可视化阶段提供更丰富的检测结果展示。
+--- Git Diff ---
+diff --git a/rfdetr/models/lwdetr.py b/rfdetr/models/lwdetr.py
+index 8f330e5..e3659b6 100644
+--- a/rfdetr/models/lwdetr.py
++++ b/rfdetr/models/lwdetr.py
+@@ -553,7 +553,10 @@ class PostProcess(nn.Module):
+         assert target_sizes.shape[1] == 2
+ 
+         prob = out_logits.sigmoid()
+-        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), self.num_select, dim=1)
++        
++        # 增加选择的预测框数量，以便在可视化时显示更多结果
++        num_select = min(self.num_select * 2, out_logits.shape[1])  # 增加一倍但不超过总查询数
++        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), num_select, dim=1)
+         scores = topk_values
+         topk_boxes = topk_indexes // out_logits.shape[2]
+         labels = topk_indexes % out_logits.shape[2]
+
+--- End Diff ---
+
+65. 在文件 'rfdetr\cli\main.py' 中: 
+--- Git Diff ---
+diff --git a/rfdetr/cli/main.py b/rfdetr/cli/main.py
+index 45a5581..b5ff57d 100644
+--- a/rfdetr/cli/main.py
++++ b/rfdetr/cli/main.py
+@@ -22,6 +22,9 @@ import roboflow
+ from rfdetr import RFDETRBase
+ import torch
+ import os
++from PIL import Image
++import torchvision.transforms.functional as F
++import numpy as np
+ 
+ def download_dataset(rf_project: roboflow.Project, dataset_version: int):
+     versions = rf_project.versions()
+
+--- End Diff ---
+
+66. 在文件 'rfdetr\engine.py' 中: # 变更摘要：调整目标检测可视化中的置信度阈值和显示样式
+
+本次变更修改了`rfdetr/engine.py`中的`save_detection_images`函数，主要调整了目标检测结果的可视化逻辑：
+
+1. **提高置信度阈值**：将显示预测框的置信度阈值从0.1提高到0.3，减少低质量预测框的显示，提升可视化结果的质量。
+
+2. **统一显示样式**：移除了对低置信度预测框的特殊标记（橙色边框和"low"标记），所有预测框统一使用红色边框和白色文本显示。
+
+3. **增加调试信息**：添加了过滤前后的预测框数量统计，并在没有预测框被绘制时提供可能的原因分析，帮助用户理解可视化结果。
+
+这些变更旨在提供更清晰、更高质量的可视化结果，同时增强调试功能，便于用户分析模型预测行为。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 78dffd7..ad225be 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -495,13 +495,18 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 category_mapping = COCO_CLASSES
+             
+             # 过滤低置信度预测
+-            # 降低阈值以便显示更多预测框，特别是对于推理可视化
+-            confidence_threshold = 0.1
++            # 使用更合理的阈值来显示预测框
++            confidence_threshold = 0.3  # 提高阈值以减少低质量预测框
++            
++            # 添加调试信息，帮助用户理解为什么有些图片没有预测框
++            print(f"Total predicted boxes before filtering: {len(scaled_pred_boxes)}")
+             
+             for box, label, score in zip(scaled_pred_boxes, labels, scores):
+                 score_value = score.item()
+-                # 即使置信度较低也显示，但可以添加一个标记
+-                is_low_confidence = score_value < 0.3
++                
++                # 只显示高于阈值的预测框
++                if score_value < confidence_threshold:
++                    continue
+                 
+                 box = box.cpu().tolist()
+                 category_id = label.item()
+@@ -529,16 +534,15 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                     max(0, min(box[3], img_h))
+                 ]
+                 
+-                # 对于低置信度的预测框，使用不同的颜色
+-                box_color = "orange" if is_low_confidence else "red"
+-                box_width = 2 if is_low_confidence else 3
++                # 使用统一的颜色和宽度绘制边界框
++                box_color = "red"
++                box_width = 3
+                 
+                 # 绘制边界框
+                 draw.rectangle(box, outline=box_color, width=box_width)
+                 
+                 # 准备文本
+-                confidence_text = f"{score_value:.2f}" + (" (low)" if is_low_confidence else "")
+-                text = f"{category_name}: {confidence_text}"
++                text = f"{category_name}: {score_value:.2f}"
+                 
+                 # 计算文本位置 - 确保在图像内
+                 text_x = max(2, min(box[0] + 2, img_w - 100))
+@@ -550,8 +554,8 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 
+                 text_position = (text_x, text_y)
+                 
+-                # 对于低置信度的预测框，使用不同的文本颜色
+-                text_color = "orange" if is_low_confidence else "white"
++                # 使用统一的文本颜色
++                text_color = "white"
+                 bg_color = "red"  # 保持背景色一致
+                 
+                 # 绘制带背景的文本
+@@ -598,6 +602,14 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                         drawn_boxes += 1
+                     except:
+                         pass
++            
++            # 添加最终的调试信息
++            print(f"Total predicted boxes after filtering: {drawn_boxes}")
++            if drawn_boxes == 0:
++                print("警告: 没有预测框被绘制。可能的原因:")
++                print("1. 所有预测的置信度都低于阈值 ({:.2f})".format(confidence_threshold))
++                print("2. 模型可能没有正确训练或加载")
++                print("3. 输入图像可能不包含模型训练时见过的类别")
+         else:
+             print("No predicted boxes to draw.")
+     else:
+
+--- End Diff ---
+
+67. 在文件 'rfdetr\engine.py' 中: ### 变更摘要
+
+修复了`save_detection_images`函数中的类别ID映射逻辑，解决了模型输出类别与COCO类别名称不匹配的问题。
+
+#### 核心变更：
+1. **重写类别映射逻辑**：明确区分模型输出的类别索引(0-based)和COCO类别索引(1-based)，首先尝试直接映射，失败时回退到原始ID
+2. **改进处理流程**：简化了条件判断结构，使代码更清晰易读
+3. **增强调试输出**：添加更详细的日志信息，便于排查类别映射问题
+4. **完善注释**：更清晰地解释了类别索引转换的原理和背景
+
+此变更解决了模型输出类别与COCO数据集类别名称之间的不一致问题，特别是在模型使用num_classes+1输出维度的情况下的映射错误。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index ad225be..e406877 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -511,17 +511,25 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 box = box.cpu().tolist()
+                 category_id = label.item()
+                 
+-                # 获取类别名称 - 模型输出包含背景类别(0)，但COCO_CLASSES从1开始
+-                # 如果类别ID为0，表示背景，不显示
+-                # 如果类别ID大于COCO_CLASSES的最大ID，尝试减去1（因为模型可能使用了num_classes+1）
++                # 获取类别名称 - 修复类别索引问题
++                # 模型输出的类别索引是从0开始的，其中0通常表示背景类别
++                # COCO_CLASSES使用的是1-based索引（1-90），没有0类别
++                # 因此我们需要将模型输出的索引+1来匹配COCO_CLASSES的索引
+                 if category_id == 0:
+                     continue  # 跳过背景类别
+-                elif category_id not in category_mapping and category_id - 1 in category_mapping:
+-                    adjusted_category_id = category_id - 1
+-                    category_name = category_mapping.get(adjusted_category_id, f"Class_{adjusted_category_id}")
+-                    print(f"调整类别ID: {category_id} -> {adjusted_category_id}, 类别名称: {category_name}")
+-                else:
++                
++                # 将模型输出的类别索引转换为COCO类别索引（+1）
++                coco_category_id = category_id
++                
++                # 如果转换后的ID在category_mapping中不存在，尝试使用原始ID
++                if coco_category_id not in category_mapping:
++                    # 这可能是因为模型使用了num_classes+1的输出维度
++                    # 在这种情况下，类别ID应该与模型训练时的类别ID对应
+                     category_name = category_mapping.get(category_id, f"Class_{category_id}")
++                    print(f"使用原始类别ID {category_id} 映射到类别名称: {category_name}")
++                else:
++                    category_name = category_mapping.get(coco_category_id, f"Class_{coco_category_id}")
++                    print(f"使用COCO类别ID {coco_category_id} 映射到类别名称: {category_name}")
+                 
+                 # 调试输出
+                 print(f"类别ID: {category_id}, 映射名称: {category_name}, 置信度: {score_value:.3f}")
+
+--- End Diff ---
+
+68. 在文件 'rfdetr\engine.py' 中: 变更摘要：修改了 `save_detection_images` 函数中的类别ID映射逻辑。主要变更包括：1) 显式地将模型输出的类别ID加1转换为COCO类别索引（之前未执行此加1操作）；2) 移除了条件判断逻辑，不再检查映射后的ID是否存在于category_mapping中；3) 简化了类别名称获取流程，统一使用转换后的ID进行映射。此变更简化了类别ID到COCO类别的映射处理，确保始终使用正确的COCO类别索引格式。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index e406877..069d1c7 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -519,17 +519,11 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                     continue  # 跳过背景类别
+                 
+                 # 将模型输出的类别索引转换为COCO类别索引（+1）
+-                coco_category_id = category_id
++                coco_category_id = category_id + 1
+                 
+-                # 如果转换后的ID在category_mapping中不存在，尝试使用原始ID
+-                if coco_category_id not in category_mapping:
+-                    # 这可能是因为模型使用了num_classes+1的输出维度
+-                    # 在这种情况下，类别ID应该与模型训练时的类别ID对应
+-                    category_name = category_mapping.get(category_id, f"Class_{category_id}")
+-                    print(f"使用原始类别ID {category_id} 映射到类别名称: {category_name}")
+-                else:
+-                    category_name = category_mapping.get(coco_category_id, f"Class_{coco_category_id}")
+-                    print(f"使用COCO类别ID {coco_category_id} 映射到类别名称: {category_name}")
++                # 使用转换后的ID获取类别名称
++                category_name = category_mapping.get(coco_category_id, f"Class_{coco_category_id}")
++                print(f"使用COCO类别ID {coco_category_id} 映射到类别名称: {category_name}")
+                 
+                 # 调试输出
+                 print(f"类别ID: {category_id}, 映射名称: {category_name}, 置信度: {score_value:.3f}")
+
+--- End Diff ---
+
+69. 在文件 'rfdetr\config.py' 中: 本次变更向 `TrainConfig` 类中添加了一个新的可选参数 `train_annotations_path`，类型为 `Optional[str]`，默认值为 `None`。这个参数允许用户自定义训练标注文件的路径，提供了更灵活的数据集配置方式。由于该参数是可选的且具有默认值，因此这是一个向后兼容的变更，不会影响现有代码的功能。
+--- Git Diff ---
+diff --git a/rfdetr/config.py b/rfdetr/config.py
+index 8dda823..c5be9f9 100644
+--- a/rfdetr/config.py
++++ b/rfdetr/config.py
+@@ -73,6 +73,7 @@ class TrainConfig(BaseModel):
+     dataset_file: Literal["coco", "o365", "roboflow"] = "coco"
+     square_resize_div_64: bool = True
+     dataset_dir: str = "./dataset"
++    train_annotations_path: Optional[str] = None
+     output_dir: str = "output"
+     multi_scale: bool = True
+     expanded_scales: bool = True
+
+--- End Diff ---
+
+70. 在文件 'rfdetr\detr.py' 中: **变更摘要：**
+
+在 `rfdetr/detr.py` 文件的 `train_from_config` 方法中，改进了训练标注文件路径的处理方式。变更前使用硬编码路径，变更后增加了灵活性，允许通过 `TrainConfig` 中的 `train_annotations_path` 参数自定义标注文件路径。当未提供该参数时，系统会回退到默认路径并记录警告日志，建议用户明确设置此值以提高配置的清晰度。此变更保持了向后兼容性，同时增强了配置的灵活性。
+--- Git Diff ---
+diff --git a/rfdetr/detr.py b/rfdetr/detr.py
+index 5809e25..45591b9 100644
+--- a/rfdetr/detr.py
++++ b/rfdetr/detr.py
+@@ -94,9 +94,15 @@ class RFDETR:
+         self.model.export(**kwargs)
+ 
+     def train_from_config(self, config: TrainConfig, **kwargs):
+-        with open(
+-            os.path.join(config.dataset_dir, "train", "_annotations.coco.json"), "r"
+-        ) as f:
++        annotations_path = config.train_annotations_path
++        if annotations_path is None:
++            annotations_path = os.path.join(config.dataset_dir, "train", "_annotations.coco.json")
++            logger.warning(
++                f"train_annotations_path not provided, defaulting to {annotations_path}. "
++                f"It is recommended to set this value explicitly in your TrainConfig."
++            )
++        
++        with open(annotations_path, "r") as f:
+             anns = json.load(f)
+             num_classes = len(anns["categories"])
+             class_names = [c["name"] for c in anns["categories"] if c["supercategory"] != "none"]
+
+--- End Diff ---
+
+71. 在文件 'rfdetr\detr.py' 中: 本次变更主要简化了 `train_from_config` 方法中关于训练注释文件路径的处理逻辑。具体变更包括：
+
+1. 移除了条件判断和警告日志，不再检查 `train_annotations_path` 是否为 None
+2. 直接使用固定的路径 `os.path.join(config.dataset_dir, "train", "_annotations.coco.json")` 来加载注释文件
+3. 删除了相关的警告日志，该日志原本在未提供 `train_annotations_path` 时会提示用户使用默认路径
+
+这一变更简化了代码逻辑，但降低了灵活性，不再允许用户通过配置指定自定义的训练注释文件路径。
+--- Git Diff ---
+diff --git a/rfdetr/detr.py b/rfdetr/detr.py
+index 45591b9..5809e25 100644
+--- a/rfdetr/detr.py
++++ b/rfdetr/detr.py
+@@ -94,15 +94,9 @@ class RFDETR:
+         self.model.export(**kwargs)
+ 
+     def train_from_config(self, config: TrainConfig, **kwargs):
+-        annotations_path = config.train_annotations_path
+-        if annotations_path is None:
+-            annotations_path = os.path.join(config.dataset_dir, "train", "_annotations.coco.json")
+-            logger.warning(
+-                f"train_annotations_path not provided, defaulting to {annotations_path}. "
+-                f"It is recommended to set this value explicitly in your TrainConfig."
+-            )
+-        
+-        with open(annotations_path, "r") as f:
++        with open(
++            os.path.join(config.dataset_dir, "train", "_annotations.coco.json"), "r"
++        ) as f:
+             anns = json.load(f)
+             num_classes = len(anns["categories"])
+             class_names = [c["name"] for c in anns["categories"] if c["supercategory"] != "none"]
+
+--- End Diff ---
+
+72. 在文件 'rfdetr\detr.py' 中: ### 变更摘要
+
+修改了`RFDETR`类中的`train_from_config`方法，增加了训练注释文件路径的灵活性。变更前直接使用硬编码路径，现在改为优先从`config.train_annotations_path`获取路径配置，若未配置则回退到默认路径，并添加警告日志建议用户显式设置该值。这一改进提高了配置灵活性，同时通过警告提示用户最佳实践。
+--- Git Diff ---
+diff --git a/rfdetr/detr.py b/rfdetr/detr.py
+index 5809e25..45591b9 100644
+--- a/rfdetr/detr.py
++++ b/rfdetr/detr.py
+@@ -94,9 +94,15 @@ class RFDETR:
+         self.model.export(**kwargs)
+ 
+     def train_from_config(self, config: TrainConfig, **kwargs):
+-        with open(
+-            os.path.join(config.dataset_dir, "train", "_annotations.coco.json"), "r"
+-        ) as f:
++        annotations_path = config.train_annotations_path
++        if annotations_path is None:
++            annotations_path = os.path.join(config.dataset_dir, "train", "_annotations.coco.json")
++            logger.warning(
++                f"train_annotations_path not provided, defaulting to {annotations_path}. "
++                f"It is recommended to set this value explicitly in your TrainConfig."
++            )
++        
++        with open(annotations_path, "r") as f:
+             anns = json.load(f)
+             num_classes = len(anns["categories"])
+             class_names = [c["name"] for c in anns["categories"] if c["supercategory"] != "none"]
+
+--- End Diff ---
+
+73. 在文件 'rfdetr\main.py' 中: ## 变更摘要
+
+在`rfdetr/main.py`中添加了新的训练标注路径配置选项：
+
+1. 在`populate_args`函数中新增`train_annotations_path`参数，默认值为None
+2. 在参数解析器`get_args_parser`中添加了对应的命令行参数`--train_annotations_path`
+3. 该参数允许用户直接指定训练标注文件的路径，覆盖程序默认的路径构建方式
+
+这次变更提供了更灵活的数据集配置方式，使用户能够自定义训练标注文件的位置，而不必遵循默认的路径结构。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index 255da4b..2852736 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -645,6 +645,7 @@ def populate_args(
+     dataset_file='coco',
+     coco_path=None,
+     dataset_dir=None,
++    train_annotations_path=None,
+     square_resize_div_64=False,
+     
+     # Output parameters
+@@ -753,6 +754,7 @@ def populate_args(
+         dataset_file=dataset_file,
+         coco_path=coco_path,
+         dataset_dir=dataset_dir,
++        train_annotations_path=train_annotations_path,
+         square_resize_div_64=square_resize_div_64,
+         output_dir=output_dir,
+         dont_save_weights=dont_save_weights,
+@@ -899,6 +901,8 @@ def get_args_parser():
+     parser.add_argument('--dataset_file', default='coco')
+     parser.add_argument('--coco_path', type=str)
+     parser.add_argument('--dataset_dir', type=str, default='./dataset')
++    parser.add_argument('--train_annotations_path', type=str, default=None,
++                        help='Path to the training annotations file. Overrides the default path construction.')
+     parser.add_argument('--square_resize_div_64', action='store_true')
+ 
+     parser.add_argument('--output_dir', default='output',
+
+--- End Diff ---
+
+74. 在文件 'rfdetr\config.py' 中: 本次代码变更修改了 `rfdetr/config.py` 文件中的 `TrainConfig` 类，具体变更内容如下：
+
+将 `train_annotations_path` 参数的默认值从 `None` 修改为 `"rf-detr/dataset/annotations/instances_train2017.json"`。这意味着当用户未显式指定训练标注文件路径时，系统将默认使用 COCO 数据集的 2017 年训练实例标注文件路径。
+
+这个变更简化了配置流程，使用户在使用 COCO 数据集时无需手动指定训练标注文件的路径，提高了用户体验。
+--- Git Diff ---
+diff --git a/rfdetr/config.py b/rfdetr/config.py
+index c5be9f9..5e856fd 100644
+--- a/rfdetr/config.py
++++ b/rfdetr/config.py
+@@ -73,7 +73,7 @@ class TrainConfig(BaseModel):
+     dataset_file: Literal["coco", "o365", "roboflow"] = "coco"
+     square_resize_div_64: bool = True
+     dataset_dir: str = "./dataset"
+-    train_annotations_path: Optional[str] = None
++    train_annotations_path: Optional[str] = "rf-detr/dataset/annotations/instances_train2017.json"
+     output_dir: str = "output"
+     multi_scale: bool = True
+     expanded_scales: bool = True
+
+--- End Diff ---
+
+75. 在文件 'rfdetr\main.py' 中: 变更摘要：修改了rfdetr/main.py中get_args_parser()函数的--train_annotations_path参数，将其默认值从None改为'rf-detr/dataset/annotations/instances_train2017.json'，并简化了帮助文本。此变更确保了在不显式指定训练注释路径时，程序将使用COCO数据集的标准训练注释文件作为默认值。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index 2852736..4cbd3a4 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -901,8 +901,8 @@ def get_args_parser():
+     parser.add_argument('--dataset_file', default='coco')
+     parser.add_argument('--coco_path', type=str)
+     parser.add_argument('--dataset_dir', type=str, default='./dataset')
+-    parser.add_argument('--train_annotations_path', type=str, default=None,
+-                        help='Path to the training annotations file. Overrides the default path construction.')
++    parser.add_argument('--train_annotations_path', type=str, default='rf-detr/dataset/annotations/instances_train2017.json',
++                        help='Path to the training annotations file.')
+     parser.add_argument('--square_resize_div_64', action='store_true')
+ 
+     parser.add_argument('--output_dir', default='output',
+
+--- End Diff ---
+
+76. 在文件 'rfdetr\detr.py' 中: 本次变更主要简化了RFDETR类中train_from_config方法的代码逻辑。具体变更如下：
+
+1. 移除了对train_annotations_path参数的默认值处理逻辑，包括：
+   - 不再在config.train_annotations_path为None时提供默认路径
+   - 删除了相关的警告日志记录
+
+2. 直接使用config.train_annotations_path作为注释文件路径，不再进行额外的路径检查和默认值设置
+
+3. 保留了从注释文件中加载类别信息的功能，包括获取类别数量和名称
+
+这次变更使代码更加简洁，但同时也要求用户必须在TrainConfig中明确提供train_annotations_path参数，否则会导致错误。
+--- Git Diff ---
+diff --git a/rfdetr/detr.py b/rfdetr/detr.py
+index 45591b9..8a82375 100644
+--- a/rfdetr/detr.py
++++ b/rfdetr/detr.py
+@@ -94,15 +94,7 @@ class RFDETR:
+         self.model.export(**kwargs)
+ 
+     def train_from_config(self, config: TrainConfig, **kwargs):
+-        annotations_path = config.train_annotations_path
+-        if annotations_path is None:
+-            annotations_path = os.path.join(config.dataset_dir, "train", "_annotations.coco.json")
+-            logger.warning(
+-                f"train_annotations_path not provided, defaulting to {annotations_path}. "
+-                f"It is recommended to set this value explicitly in your TrainConfig."
+-            )
+-        
+-        with open(annotations_path, "r") as f:
++        with open(config.train_annotations_path, "r") as f:
+             anns = json.load(f)
+             num_classes = len(anns["categories"])
+             class_names = [c["name"] for c in anns["categories"] if c["supercategory"] != "none"]
+
+--- End Diff ---
+
+77. 在文件 'rfdetr\config.py' 中: ## 变更摘要
+
+在`rfdetr/config.py`文件的`TrainConfig`类中添加了一个新的配置参数`val_annotations_path`，用于指定验证集标注文件的路径。该参数为可选类型（Optional[str]），默认值为None。此变更与已有的`train_annotations_path`参数相对应，完善了训练配置中对验证集的支持，使得模型在训练过程中可以加载验证集数据进行评估。
+--- Git Diff ---
+diff --git a/rfdetr/config.py b/rfdetr/config.py
+index 5e856fd..caac03a 100644
+--- a/rfdetr/config.py
++++ b/rfdetr/config.py
+@@ -74,6 +74,7 @@ class TrainConfig(BaseModel):
+     square_resize_div_64: bool = True
+     dataset_dir: str = "./dataset"
+     train_annotations_path: Optional[str] = "rf-detr/dataset/annotations/instances_train2017.json"
++    val_annotations_path: Optional[str] = None
+     output_dir: str = "output"
+     multi_scale: bool = True
+     expanded_scales: bool = True
+
+--- End Diff ---
+
+78. 在文件 'rfdetr\main.py' 中: **变更摘要**：
+
+在 `rfdetr/main.py` 中添加了对验证集注释文件路径的自定义配置支持。具体变更包括：
+
+1. 在 `populate_args()` 函数中新增了 `val_annotations_path` 参数，允许传递验证集注释文件路径
+2. 在参数解析器 `get_args_parser()` 中添加了 `--val_annotations_path` 命令行选项，默认值为 None
+3. 该参数可覆盖默认的验证集注释文件路径构建方式，提供了更灵活的数据集配置能力
+
+此变更使用户能够显式指定验证集注释文件的位置，增强了模型对不同数据集组织结构的适应性。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index 4cbd3a4..d6ae981 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -646,6 +646,7 @@ def populate_args(
+     coco_path=None,
+     dataset_dir=None,
+     train_annotations_path=None,
++    val_annotations_path=None,
+     square_resize_div_64=False,
+     
+     # Output parameters
+@@ -755,6 +756,7 @@ def populate_args(
+         coco_path=coco_path,
+         dataset_dir=dataset_dir,
+         train_annotations_path=train_annotations_path,
++        val_annotations_path=val_annotations_path,
+         square_resize_div_64=square_resize_div_64,
+         output_dir=output_dir,
+         dont_save_weights=dont_save_weights,
+@@ -903,6 +905,8 @@ def get_args_parser():
+     parser.add_argument('--dataset_dir', type=str, default='./dataset')
+     parser.add_argument('--train_annotations_path', type=str, default='rf-detr/dataset/annotations/instances_train2017.json',
+                         help='Path to the training annotations file.')
++    parser.add_argument('--val_annotations_path', type=str, default=None,
++                        help='Path to the validation annotations file. Overrides the default path construction.')
+     parser.add_argument('--square_resize_div_64', action='store_true')
+ 
+     parser.add_argument('--output_dir', default='output',
+
+--- End Diff ---
+
+79. 在文件 'rfdetr\config.py' 中: 本次变更修改了 `rfdetr/config.py` 文件中的 `TrainConfig` 类，将 `val_annotations_path` 参数的默认值从 `None` 修改为 `"rf-detr/dataset/annotations/instances_val2017.json"`。这个变更确保了验证阶段有默认的验证注释文件路径，使得模型训练时能够自动使用验证数据集进行评估，而无需手动指定验证注释路径。
+--- Git Diff ---
+diff --git a/rfdetr/config.py b/rfdetr/config.py
+index caac03a..a2f08c9 100644
+--- a/rfdetr/config.py
++++ b/rfdetr/config.py
+@@ -74,7 +74,7 @@ class TrainConfig(BaseModel):
+     square_resize_div_64: bool = True
+     dataset_dir: str = "./dataset"
+     train_annotations_path: Optional[str] = "rf-detr/dataset/annotations/instances_train2017.json"
+-    val_annotations_path: Optional[str] = None
++    val_annotations_path: Optional[str] = "rf-detr/dataset/annotations/instances_val2017.json"
+     output_dir: str = "output"
+     multi_scale: bool = True
+     expanded_scales: bool = True
+
+--- End Diff ---
+
+80. 在文件 'rfdetr\main.py' 中: ## 变更摘要
+
+修改了`rfdetr/main.py`中的命令行参数配置，将`--val_annotations_path`参数的默认值从`None`更改为具体的默认路径`'rf-detr/dataset/annotations/instances_val2017.json'`，同时简化了该参数的帮助文本。这一变更使用户在不指定验证集注释路径时，能够自动使用预设的验证集注释文件，提高了工具的易用性。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index d6ae981..e06d660 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -905,8 +905,8 @@ def get_args_parser():
+     parser.add_argument('--dataset_dir', type=str, default='./dataset')
+     parser.add_argument('--train_annotations_path', type=str, default='rf-detr/dataset/annotations/instances_train2017.json',
+                         help='Path to the training annotations file.')
+-    parser.add_argument('--val_annotations_path', type=str, default=None,
+-                        help='Path to the validation annotations file. Overrides the default path construction.')
++    parser.add_argument('--val_annotations_path', type=str, default='rf-detr/dataset/annotations/instances_val2017.json',
++                        help='Path to the validation annotations file.')
+     parser.add_argument('--square_resize_div_64', action='store_true')
+ 
+     parser.add_argument('--output_dir', default='output',
+
+--- End Diff ---
+
+81. 在文件 'rfdetr\detr.py' 中: 本次变更对`rfdetr/detr.py`文件中的`train_from_config`方法进行了修改。变更内容包括：
+
+1. 添加了两行注释，说明相关逻辑现在由数据集构建器和主训练循环处理。
+2. 保留了对训练注释文件的读取和类别数量计算，因为需要将类别数量传递给训练循环。
+
+这次变更的核心是将部分训练逻辑从该方法中移出，改为由数据集构建器和主训练循环处理，但仍保留了计算类别数量的功能，因为该信息仍需传递给训练循环。
+--- Git Diff ---
+diff --git a/rfdetr/detr.py b/rfdetr/detr.py
+index 8a82375..d26fe89 100644
+--- a/rfdetr/detr.py
++++ b/rfdetr/detr.py
+@@ -94,6 +94,8 @@ class RFDETR:
+         self.model.export(**kwargs)
+ 
+     def train_from_config(self, config: TrainConfig, **kwargs):
++        # This logic is now handled by the dataset builder and the main training loop
++        # We still need to pass the num_classes to the training loop
+         with open(config.train_annotations_path, "r") as f:
+             anns = json.load(f)
+             num_classes = len(anns["categories"])
+
+--- End Diff ---
+
+82. 在文件 'rfdetr\config.py' 中: ## 变更摘要
+
+修改了 `rfdetr/config.py` 文件中 `TrainConfig` 类的默认路径配置：
+
+- 将 `train_annotations_path` 的默认值从 `"rf-detr/dataset/annotations/instances_train2017.json"` 更改为 `"./dataset/annotations/instances_train2017.json"`
+- 将 `val_annotations_path` 的默认值从 `"rf-detr/dataset/annotations/instances_val2017.json"` 更改为 `"./dataset/annotations/instances_val2017.json"`
+
+此变更简化了数据集注释文件的默认路径，使其与配置中已有的 `dataset_dir` 路径格式保持一致，提高了配置文件的一致性和可维护性。
+--- Git Diff ---
+diff --git a/rfdetr/config.py b/rfdetr/config.py
+index a2f08c9..f71cdc0 100644
+--- a/rfdetr/config.py
++++ b/rfdetr/config.py
+@@ -73,8 +73,8 @@ class TrainConfig(BaseModel):
+     dataset_file: Literal["coco", "o365", "roboflow"] = "coco"
+     square_resize_div_64: bool = True
+     dataset_dir: str = "./dataset"
+-    train_annotations_path: Optional[str] = "rf-detr/dataset/annotations/instances_train2017.json"
+-    val_annotations_path: Optional[str] = "rf-detr/dataset/annotations/instances_val2017.json"
++    train_annotations_path: Optional[str] = "./dataset/annotations/instances_train2017.json"
++    val_annotations_path: Optional[str] = "./dataset/annotations/instances_val2017.json"
+     output_dir: str = "output"
+     multi_scale: bool = True
+     expanded_scales: bool = True
+
+--- End Diff ---
+
+83. 在文件 'rfdetr\main.py' 中: ## 变更摘要
+
+修改了RF-DETR主程序中训练和验证数据集注释文件的默认路径参数，将路径前缀从`'rf-detr/'`更改为`'./'`。具体变更包括：
+
+1. `--train_annotations_path`默认值从`'rf-detr/dataset/annotations/instances_train2017.json'`改为`'./dataset/annotations/instances_train2017.json'`
+2. `--val_annotations_path`默认值从`'rf-detr/dataset/annotations/instances_val2017.json'`改为`'./dataset/annotations/instances_val2017.json'`
+
+此变更调整了数据集注释文件的相对路径引用方式，使其直接从当前工作目录而非项目子目录引用，可能反映了项目目录结构的调整或路径引用方式的规范化。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index e06d660..2cc77d7 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -903,9 +903,9 @@ def get_args_parser():
+     parser.add_argument('--dataset_file', default='coco')
+     parser.add_argument('--coco_path', type=str)
+     parser.add_argument('--dataset_dir', type=str, default='./dataset')
+-    parser.add_argument('--train_annotations_path', type=str, default='rf-detr/dataset/annotations/instances_train2017.json',
++    parser.add_argument('--train_annotations_path', type=str, default='./dataset/annotations/instances_train2017.json',
+                         help='Path to the training annotations file.')
+-    parser.add_argument('--val_annotations_path', type=str, default='rf-detr/dataset/annotations/instances_val2017.json',
++    parser.add_argument('--val_annotations_path', type=str, default='./dataset/annotations/instances_val2017.json',
+                         help='Path to the validation annotations file.')
+     parser.add_argument('--square_resize_div_64', action='store_true')
+ 
+
+--- End Diff ---
+
+84. 在文件 'rfdetr\engine.py' 中: 在 rfdetr/engine.py 文件中添加了对自定义类别的支持，新增了从 rfdetr.util.custom_classes 模块导入 CUSTOM_CLASSES 的语句。这一变更使得引擎能够处理自定义类别数据，扩展了原有的类别支持能力（之前仅支持 COCO_CLASSES）。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 069d1c7..f2b530b 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -42,6 +42,7 @@ from PIL import Image, ImageDraw, ImageFont
+ import torchvision.transforms.functional as F
+ from rfdetr.util import box_ops
+ from rfdetr.util.coco_classes import COCO_CLASSES
++from rfdetr.util.custom_classes import CUSTOM_CLASSES
+ import numpy as np
+ 
+ def get_autocast_args(args):
+
+--- End Diff ---
+
+85. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+修改了`rfdetr/engine.py`中的类别名称获取逻辑，将默认使用的类别映射从固定的`COCO_CLASSES`更改为用户自定义的`CUSTOM_CLASSES`。具体变更包括：
+
+1. 更新了注释，表明现在优先使用用户自定义类别映射而非COCO_CLASSES
+2. 在获取类别映射的代码中，将回退方案从`COCO_CLASSES`改为`CUSTOM_CLASSES`
+3. 在异常处理中也同样使用`CUSTOM_CLASSES`作为回退方案
+
+这一变更增强了代码的灵活性，使其能够支持用户自定义的类别定义，而不再局限于COCO数据集的固定类别，提高了模型在不同数据集上的适用性。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index f2b530b..416faa5 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -477,7 +477,7 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+             scaled_pred_boxes = box_ops.box_cxcywh_to_xyxy(pred_boxes)
+             scaled_pred_boxes = scaled_pred_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_pred_boxes.device)
+             
+-            # 改进的类别名称获取逻辑 - 使用COCO_CLASSES
++            # 改进的类别名称获取逻辑 - 优先使用用户自定义类别映射
+             category_mapping = {}
+             try:
+                 # 从coco_dataset获取类别映射
+@@ -486,14 +486,14 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                         category_mapping[cat_id] = cat_info['name']
+                     print(f"从coco_dataset获取类别: {category_mapping}")
+                 
+-                # 如果coco_dataset没有类别信息，使用COCO_CLASSES
++                # 如果coco_dataset没有类别信息，使用用户自定义类别映射
+                 if not category_mapping:
+-                    category_mapping = COCO_CLASSES
+-                    print(f"使用COCO_CLASSES映射: {len(category_mapping)}个类别")
++                    category_mapping = CUSTOM_CLASSES
++                    print(f"使用CUSTOM_CLASSES映射: {len(category_mapping)}个类别")
+                 
+             except Exception as e:
+-                print(f"获取类别映射时出错: {e}, 使用COCO_CLASSES回退方案")
+-                category_mapping = COCO_CLASSES
++                print(f"获取类别映射时出错: {e}, 使用CUSTOM_CLASSES回退方案")
++                category_mapping = CUSTOM_CLASSES
+             
+             # 过滤低置信度预测
+             # 使用更合理的阈值来显示预测框
+
+--- End Diff ---
+
+86. 在文件 'rfdetr\config.py' 中: 变更摘要：
+修改了rfdetr/config.py文件中ModelConfig类的group_detr参数默认值，从13调整为10。
+--- Git Diff ---
+diff --git a/rfdetr/config.py b/rfdetr/config.py
+index f71cdc0..41db9d2 100644
+--- a/rfdetr/config.py
++++ b/rfdetr/config.py
+@@ -28,7 +28,7 @@ class ModelConfig(BaseModel):
+     pretrain_weights: Optional[str] = None
+     device: Literal["cpu", "cuda", "mps"] = DEVICE
+     resolution: int = 560
+-    group_detr: int = 13
++    group_detr: int = 10
+     gradient_checkpointing: bool = False
+ 
+ class RFDETRBaseConfig(ModelConfig):
+
+--- End Diff ---
+
+87. 在文件 'rfdetr\main.py' 中: 这个变更摘要如下：
+
+在rfdetr/main.py文件中，将group_detr参数的默认值从13修改为10。这是一个参数调整的变更，可能影响模型的行为或性能，但未改变代码结构或逻辑。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index 2cc77d7..d3a816e 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -615,7 +615,7 @@ def populate_args(
+     sa_nheads=8,
+     ca_nheads=8,
+     num_queries=300,
+-    group_detr=13,
++    group_detr=10,
+     two_stage=False,
+     projector_scale='P4',
+     lite_refpoint_refine=False,
+
+--- End Diff ---
+
+88. 在文件 'rfdetr\main.py' 中: ## 变更摘要
+
+修改了`rfdetr/main.py`中的`group_detr`参数默认值，从13调整为10。该参数用于控制DETR训练过程中的分组数量，目的是加速训练过程。这一调整可能会影响训练速度和模型性能。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index d3a816e..a395442 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -864,7 +864,7 @@ def get_args_parser():
+                         help="Number of attention heads inside the transformer's cross-attentions")
+     parser.add_argument('--num_queries', default=300, type=int,
+                         help="Number of query slots")
+-    parser.add_argument('--group_detr', default=13, type=int,
++    parser.add_argument('--group_detr', default=10, type=int,
+                         help="Number of groups to speed up detr training")
+     parser.add_argument('--two_stage', action='store_true')
+     parser.add_argument('--projector_scale', default=['P4'], type=str, nargs='+', choices=('P3', 'P4', 'P5', 'P6'))
+
+--- End Diff ---
+
+89. 在文件 'rfdetr\engine.py' 中: # 变更摘要
+
+将目标检测图像保存功能中的类别索引处理逻辑从COCO数据集固定类别映射改为支持用户自定义类别映射。主要修改包括：
+
+1. 更新注释，将"COCO_CLASSES使用1-based索引(1-90)"改为"用户自定义类别映射使用1-based索引(1-10)"
+2. 变量重命名：将`coco_category_id`改为`custom_category_id`，以反映新的使用场景
+3. 修改相关打印信息，明确指出使用的是"用户自定义类别ID"而非"COCO类别ID"
+
+此变更提高了代码的灵活性，使其不再局限于COCO数据集的90个固定类别，而是可以适应自定义的10个类别的场景。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 416faa5..e14cd0c 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -514,17 +514,17 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 
+                 # 获取类别名称 - 修复类别索引问题
+                 # 模型输出的类别索引是从0开始的，其中0通常表示背景类别
+-                # COCO_CLASSES使用的是1-based索引（1-90），没有0类别
+-                # 因此我们需要将模型输出的索引+1来匹配COCO_CLASSES的索引
++                # 用户自定义类别映射使用的是1-based索引（1-10），没有0类别
++                # 因此我们需要将模型输出的索引+1来匹配用户自定义类别映射的索引
+                 if category_id == 0:
+                     continue  # 跳过背景类别
+                 
+-                # 将模型输出的类别索引转换为COCO类别索引（+1）
+-                coco_category_id = category_id + 1
++                # 将模型输出的类别索引转换为用户自定义类别索引（+1）
++                custom_category_id = category_id + 1
+                 
+                 # 使用转换后的ID获取类别名称
+-                category_name = category_mapping.get(coco_category_id, f"Class_{coco_category_id}")
+-                print(f"使用COCO类别ID {coco_category_id} 映射到类别名称: {category_name}")
++                category_name = category_mapping.get(custom_category_id, f"Class_{custom_category_id}")
++                print(f"使用用户自定义类别ID {custom_category_id} 映射到类别名称: {category_name}")
+                 
+                 # 调试输出
+                 print(f"类别ID: {category_id}, 映射名称: {category_name}, 置信度: {score_value:.3f}")
+
+--- End Diff ---
+
+90. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+增强了`save_detection_images`函数中类别映射获取过程的调试能力，主要变更包括：
+
+1. **增加错误情况日志**：当coco_dataset为空或缺少cats属性时，添加相应的提示信息
+2. **增强类别映射使用情况的日志输出**：
+   - 使用CUSTOM_CLASSES时，打印映射内容详情
+   - 使用coco_dataset类别映射时，打印类别数量
+3. **完善异常处理日志**：在获取类别映射出错时，除了使用CUSTOM_CLASSES作为回退方案外，还打印其具体内容
+
+这些变更提高了代码的可调试性，使开发者能够更清晰地了解类别映射的获取和使用过程，便于排查相关问题。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index e14cd0c..db92144 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -485,15 +485,21 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                     for cat_id, cat_info in coco_dataset.cats.items():
+                         category_mapping[cat_id] = cat_info['name']
+                     print(f"从coco_dataset获取类别: {category_mapping}")
++                else:
++                    print("coco_dataset为空或没有cats属性")
+                 
+                 # 如果coco_dataset没有类别信息，使用用户自定义类别映射
+                 if not category_mapping:
+                     category_mapping = CUSTOM_CLASSES
+                     print(f"使用CUSTOM_CLASSES映射: {len(category_mapping)}个类别")
++                    print(f"CUSTOM_CLASSES内容: {CUSTOM_CLASSES}")
++                else:
++                    print(f"使用coco_dataset类别映射: {len(category_mapping)}个类别")
+                 
+             except Exception as e:
+                 print(f"获取类别映射时出错: {e}, 使用CUSTOM_CLASSES回退方案")
+                 category_mapping = CUSTOM_CLASSES
++                print(f"CUSTOM_CLASSES内容: {CUSTOM_CLASSES}")
+             
+             # 过滤低置信度预测
+             # 使用更合理的阈值来显示预测框
+
+--- End Diff ---
+
+91. 在文件 'rfdetr\engine.py' 中: ## 变更摘要
+
+修改了`rfdetr/engine.py`文件中的`save_detection_images`函数，增强了调试输出信息：
+
+1. 简化了调试信息文本，将"使用用户自定义类别ID"改为更简洁的"使用类别ID"
+2. 新增了一行调试输出，打印完整的类别映射字典内容，便于调试类别ID到名称的映射关系
+
+此变更有助于在目标检测图像保存过程中更好地追踪和调试类别映射问题。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index db92144..7040600 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -530,7 +530,8 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 
+                 # 使用转换后的ID获取类别名称
+                 category_name = category_mapping.get(custom_category_id, f"Class_{custom_category_id}")
+-                print(f"使用用户自定义类别ID {custom_category_id} 映射到类别名称: {category_name}")
++                print(f"使用类别ID {custom_category_id} 映射到类别名称: {category_name}")
++                print(f"类别映射内容: {category_mapping}")
+                 
+                 # 调试输出
+                 print(f"类别ID: {category_id}, 映射名称: {category_name}, 置信度: {score_value:.3f}")
+
+--- End Diff ---
+
+92. 在文件 'rfdetr\engine.py' 中: 无法生成摘要，原始 diff 内容如下：
+---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 7040600..934426a 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -527,6 +527,13 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 
+                 # 将模型输出的类别索引转换为用户自定义类别索引（+1）
+                 custom_category_id = category_id + 1
++                print(f"模型输出的类别ID: {category_id}, 转换后的ID: {custom_category_id}")
++                
++                # 检查转换后的ID是否在用户自定义类别映射范围内
++                max_custom_id = max(CUSTOM_CLASSES.keys()) if CUSTOM_CLASSES else 0
++                print(f"用户自定义类别映射的最大ID: {max_custom_id}")
++                if custom_category_id > max_custom_id:
++                    print(f"警告: 类别ID {custom_category_id} 超出了用户自定义类别映射范围 [1, {max_custom_id}]")
+                 
+                 # 使用转换后的ID获取类别名称
+                 category_name = category_mapping.get(custom_category_id, f"Class_{custom_category_id}")
+
+---
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 7040600..934426a 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -527,6 +527,13 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 
+                 # 将模型输出的类别索引转换为用户自定义类别索引（+1）
+                 custom_category_id = category_id + 1
++                print(f"模型输出的类别ID: {category_id}, 转换后的ID: {custom_category_id}")
++                
++                # 检查转换后的ID是否在用户自定义类别映射范围内
++                max_custom_id = max(CUSTOM_CLASSES.keys()) if CUSTOM_CLASSES else 0
++                print(f"用户自定义类别映射的最大ID: {max_custom_id}")
++                if custom_category_id > max_custom_id:
++                    print(f"警告: 类别ID {custom_category_id} 超出了用户自定义类别映射范围 [1, {max_custom_id}]")
+                 
+                 # 使用转换后的ID获取类别名称
+                 category_name = category_mapping.get(custom_category_id, f"Class_{custom_category_id}")
+
+--- End Diff ---
+
+93. 在文件 'rfdetr\engine.py' 中: 变更摘要：修改了目标检测图像保存功能中的类别ID处理逻辑。变更将原来"模型输出类别索引+1转换为用户自定义类别索引"的方式改为"直接使用模型输出的类别ID作为用户自定义类别映射的ID"。此变更表明之前的假设（模型输出索引从0开始而用户自定义类别从1开始）可能不正确，模型输出的类别ID已经直接对应于用户自定义类别映射的ID。同时更新了相关注释和日志输出信息，以反映新的处理逻辑。
+--- Git Diff ---
+diff --git a/rfdetr/engine.py b/rfdetr/engine.py
+index 934426a..bd64e2a 100644
+--- a/rfdetr/engine.py
++++ b/rfdetr/engine.py
+@@ -520,22 +520,22 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
+                 
+                 # 获取类别名称 - 修复类别索引问题
+                 # 模型输出的类别索引是从0开始的，其中0通常表示背景类别
+-                # 用户自定义类别映射使用的是1-based索引（1-10），没有0类别
+-                # 因此我们需要将模型输出的索引+1来匹配用户自定义类别映射的索引
++                # 用户自定义类别映射使用的是1-based索引（1-10）
++                # 但模型输出的类别ID可能直接对应用户自定义类别映射的ID
+                 if category_id == 0:
+                     continue  # 跳过背景类别
+                 
+-                # 将模型输出的类别索引转换为用户自定义类别索引（+1）
+-                custom_category_id = category_id + 1
+-                print(f"模型输出的类别ID: {category_id}, 转换后的ID: {custom_category_id}")
++                # 直接使用模型输出的类别ID作为用户自定义类别映射的ID
++                custom_category_id = category_id
++                print(f"模型输出的类别ID: {category_id}, 直接使用的ID: {custom_category_id}")
+                 
+-                # 检查转换后的ID是否在用户自定义类别映射范围内
++                # 检查ID是否在用户自定义类别映射范围内
+                 max_custom_id = max(CUSTOM_CLASSES.keys()) if CUSTOM_CLASSES else 0
+                 print(f"用户自定义类别映射的最大ID: {max_custom_id}")
+                 if custom_category_id > max_custom_id:
+                     print(f"警告: 类别ID {custom_category_id} 超出了用户自定义类别映射范围 [1, {max_custom_id}]")
+                 
+-                # 使用转换后的ID获取类别名称
++                # 使用直接的ID获取类别名称
+                 category_name = category_mapping.get(custom_category_id, f"Class_{custom_category_id}")
+                 print(f"使用类别ID {custom_category_id} 映射到类别名称: {category_name}")
+                 print(f"类别映射内容: {category_mapping}")
+
+--- End Diff ---
+
+94. 在文件 'rfdetr\main.py' 中: ## 变更摘要
+
+修正了RF-DETR模型中检测头重新初始化的逻辑，当预训练模型类别数与用户配置不匹配时，现在使用用户配置的类别数（加1）而非预训练模型的类别数来重新初始化检测头，确保模型能正确适应目标数据集的类别数量。同时添加了中文注释说明此操作的意图。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index a395442..6c85e2d 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -102,7 +102,8 @@ class Model:
+                     f"Pretrained model has {checkpoint_num_classes - 1} classes, but your model is configured for {args.num_classes} classes.\n"
+                     f"The detection head of the model will be re-initialized to match your dataset."
+                 )
+-                self.reinitialize_detection_head(checkpoint_num_classes)
++                # 重新初始化检测头以匹配用户配置的类别数
++                self.reinitialize_detection_head(args.num_classes + 1)
+             # add support to exclude_keys
+             # e.g., when load object365 pretrain, do not load `class_embed.[weight, bias]`
+             if args.pretrain_exclude_keys is not None:
+
+--- End Diff ---
+
+95. 在文件 'rfdetr\main.py' 中: ### 变更摘要
+
+在`rfdetr/main.py`的`Model`类中添加了处理预训练模型权重加载时的检测头权重移除逻辑。具体变更：
+
+1. 在重新初始化检测头后，新增代码从checkpoint中移除所有检测头相关的权重（以'class_embed'或'bbox_embed'开头的键）
+2. 这样做是为了避免预训练模型的检测头权重与重新初始化的检测头之间出现形状不匹配的问题
+3. 每次移除权重时会打印相应的日志信息
+
+此变更解决了在加载预训练模型并重新初始化检测头时可能出现的权重形状不兼容问题，提高了模型加载的稳定性。
+--- Git Diff ---
+diff --git a/rfdetr/main.py b/rfdetr/main.py
+index 6c85e2d..111b6ad 100644
+--- a/rfdetr/main.py
++++ b/rfdetr/main.py
+@@ -104,6 +104,12 @@ class Model:
+                 )
+                 # 重新初始化检测头以匹配用户配置的类别数
+                 self.reinitialize_detection_head(args.num_classes + 1)
++                
++                # 从checkpoint中移除检测头相关的权重，以避免形状不匹配的问题
++                detection_head_keys = [key for key in checkpoint['model'].keys() if key.startswith('class_embed') or key.startswith('bbox_embed')]
++                for key in detection_head_keys:
++                    del checkpoint['model'][key]
++                    print(f"Removed {key} from checkpoint to avoid shape mismatch")
+             # add support to exclude_keys
+             # e.g., when load object365 pretrain, do not load `class_embed.[weight, bias]`
+             if args.pretrain_exclude_keys is not None:
+
+--- End Diff ---

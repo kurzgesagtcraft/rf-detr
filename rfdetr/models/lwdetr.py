@@ -153,11 +153,13 @@ class LWDETR(nn.Module):
             masks.append(mask)
             assert mask is not None
 
-        if self.training:
+        # 在推理时也使用所有group，以提高检测效果
+        # 但在评估时仍然只使用一个group以保持一致性
+        if self.training or not self.two_stage:
             refpoint_embed_weight = self.refpoint_embed.weight
             query_feat_weight = self.query_feat.weight
         else:
-            # only use one group in inference
+            # only use one group in inference for two_stage models
             refpoint_embed_weight = self.refpoint_embed.weight[:self.num_queries]
             query_feat_weight = self.query_feat.weight[:self.num_queries]
 
@@ -551,7 +553,10 @@ class PostProcess(nn.Module):
         assert target_sizes.shape[1] == 2
 
         prob = out_logits.sigmoid()
-        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), self.num_select, dim=1)
+        
+        # 增加选择的预测框数量，以便在可视化时显示更多结果
+        num_select = min(self.num_select * 2, out_logits.shape[1])  # 增加一倍但不超过总查询数
+        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), num_select, dim=1)
         scores = topk_values
         topk_boxes = topk_indexes // out_logits.shape[2]
         labels = topk_indexes % out_logits.shape[2]

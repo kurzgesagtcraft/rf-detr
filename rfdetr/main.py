@@ -102,7 +102,14 @@ class Model:
                     f"Pretrained model has {checkpoint_num_classes - 1} classes, but your model is configured for {args.num_classes} classes.\n"
                     f"The detection head of the model will be re-initialized to match your dataset."
                 )
-                self.reinitialize_detection_head(checkpoint_num_classes)
+                # 重新初始化检测头以匹配用户配置的类别数
+                self.reinitialize_detection_head(args.num_classes + 1)
+                
+                # 从checkpoint中移除检测头相关的权重，以避免形状不匹配的问题
+                detection_head_keys = [key for key in checkpoint['model'].keys() if key.startswith('class_embed') or key.startswith('bbox_embed')]
+                for key in detection_head_keys:
+                    del checkpoint['model'][key]
+                    print(f"Removed {key} from checkpoint to avoid shape mismatch")
             # add support to exclude_keys
             # e.g., when load object365 pretrain, do not load `class_embed.[weight, bias]`
             if args.pretrain_exclude_keys is not None:
@@ -615,7 +622,7 @@ def populate_args(
     sa_nheads=8,
     ca_nheads=8,
     num_queries=300,
-    group_detr=13,
+    group_detr=10,
     two_stage=False,
     projector_scale='P4',
     lite_refpoint_refine=False,
@@ -645,6 +652,8 @@ def populate_args(
     dataset_file='coco',
     coco_path=None,
     dataset_dir=None,
+    train_annotations_path=None,
+    val_annotations_path=None,
     square_resize_div_64=False,
     
     # Output parameters
@@ -753,6 +762,8 @@ def populate_args(
         dataset_file=dataset_file,
         coco_path=coco_path,
         dataset_dir=dataset_dir,
+        train_annotations_path=train_annotations_path,
+        val_annotations_path=val_annotations_path,
         square_resize_div_64=square_resize_div_64,
         output_dir=output_dir,
         dont_save_weights=dont_save_weights,
@@ -860,7 +871,7 @@ def get_args_parser():
                         help="Number of attention heads inside the transformer's cross-attentions")
     parser.add_argument('--num_queries', default=300, type=int,
                         help="Number of query slots")
-    parser.add_argument('--group_detr', default=13, type=int,
+    parser.add_argument('--group_detr', default=10, type=int,
                         help="Number of groups to speed up detr training")
     parser.add_argument('--two_stage', action='store_true')
     parser.add_argument('--projector_scale', default=['P4'], type=str, nargs='+', choices=('P3', 'P4', 'P5', 'P6'))
@@ -899,6 +910,10 @@ def get_args_parser():
     parser.add_argument('--dataset_file', default='coco')
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--dataset_dir', type=str, default='./dataset')
+    parser.add_argument('--train_annotations_path', type=str, default='./dataset/annotations/instances_train2017.json',
+                        help='Path to the training annotations file.')
+    parser.add_argument('--val_annotations_path', type=str, default='./dataset/annotations/instances_val2017.json',
+                        help='Path to the validation annotations file.')
     parser.add_argument('--square_resize_div_64', action='store_true')
 
     parser.add_argument('--output_dir', default='output',

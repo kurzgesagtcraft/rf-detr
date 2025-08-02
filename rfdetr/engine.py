@@ -42,6 +42,7 @@ from PIL import Image, ImageDraw, ImageFont
 import torchvision.transforms.functional as F
 from rfdetr.util import box_ops
 from rfdetr.util.coco_classes import COCO_CLASSES
+from rfdetr.util.custom_classes import CUSTOM_CLASSES
 import numpy as np
 
 def get_autocast_args(args):
@@ -476,7 +477,7 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
             scaled_pred_boxes = box_ops.box_cxcywh_to_xyxy(pred_boxes)
             scaled_pred_boxes = scaled_pred_boxes * torch.tensor([img_w, img_h, img_w, img_h], device=scaled_pred_boxes.device)
             
-            # 改进的类别名称获取逻辑 - 使用COCO_CLASSES
+            # 改进的类别名称获取逻辑 - 优先使用用户自定义类别映射
             category_mapping = {}
             try:
                 # 从coco_dataset获取类别映射
@@ -484,41 +485,63 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
                     for cat_id, cat_info in coco_dataset.cats.items():
                         category_mapping[cat_id] = cat_info['name']
                     print(f"从coco_dataset获取类别: {category_mapping}")
+                else:
+                    print("coco_dataset为空或没有cats属性")
                 
-                # 如果coco_dataset没有类别信息，使用COCO_CLASSES
+                # 如果coco_dataset没有类别信息，使用用户自定义类别映射
                 if not category_mapping:
-                    category_mapping = COCO_CLASSES
-                    print(f"使用COCO_CLASSES映射: {len(category_mapping)}个类别")
+                    category_mapping = CUSTOM_CLASSES
+                    print(f"使用CUSTOM_CLASSES映射: {len(category_mapping)}个类别")
+                    print(f"CUSTOM_CLASSES内容: {CUSTOM_CLASSES}")
+                else:
+                    print(f"使用coco_dataset类别映射: {len(category_mapping)}个类别")
                 
             except Exception as e:
-                print(f"获取类别映射时出错: {e}, 使用COCO_CLASSES回退方案")
-                category_mapping = COCO_CLASSES
+                print(f"获取类别映射时出错: {e}, 使用CUSTOM_CLASSES回退方案")
+                category_mapping = CUSTOM_CLASSES
+                print(f"CUSTOM_CLASSES内容: {CUSTOM_CLASSES}")
             
             # 过滤低置信度预测
-            confidence_threshold = 0.3
+            # 使用更合理的阈值来显示预测框
+            confidence_threshold = 0.3  # 提高阈值以减少低质量预测框
+            
+            # 添加调试信息，帮助用户理解为什么有些图片没有预测框
+            print(f"Total predicted boxes before filtering: {len(scaled_pred_boxes)}")
             
             for box, label, score in zip(scaled_pred_boxes, labels, scores):
                 score_value = score.item()
+                
+                # 只显示高于阈值的预测框
                 if score_value < confidence_threshold:
                     continue
-                    
+                
                 box = box.cpu().tolist()
                 category_id = label.item()
                 
-                # 获取类别名称 - 模型输出包含背景类别(0)，但COCO_CLASSES从1开始
-                # 如果类别ID为0，表示背景，不显示
-                # 如果类别ID大于COCO_CLASSES的最大ID，尝试减去1（因为模型可能使用了num_classes+1）
+                # 获取类别名称 - 修复类别索引问题
+                # 模型输出的类别索引是从0开始的，其中0通常表示背景类别
+                # 用户自定义类别映射使用的是1-based索引（1-10）
+                # 但模型输出的类别ID可能直接对应用户自定义类别映射的ID
                 if category_id == 0:
                     continue  # 跳过背景类别
-                elif category_id not in category_mapping and category_id - 1 in category_mapping:
-                    adjusted_category_id = category_id - 1
-                    category_name = category_mapping.get(adjusted_category_id, f"Class_{adjusted_category_id}")
-                    print(f"调整类别ID: {category_id} -> {adjusted_category_id}, 类别名称: {category_name}")
-                else:
-                    category_name = category_mapping.get(category_id, f"Class_{category_id}")
+                
+                # 直接使用模型输出的类别ID作为用户自定义类别映射的ID
+                custom_category_id = category_id
+                print(f"模型输出的类别ID: {category_id}, 直接使用的ID: {custom_category_id}")
+                
+                # 检查ID是否在用户自定义类别映射范围内
+                max_custom_id = max(CUSTOM_CLASSES.keys()) if CUSTOM_CLASSES else 0
+                print(f"用户自定义类别映射的最大ID: {max_custom_id}")
+                if custom_category_id > max_custom_id:
+                    print(f"警告: 类别ID {custom_category_id} 超出了用户自定义类别映射范围 [1, {max_custom_id}]")
+                
+                # 使用直接的ID获取类别名称
+                category_name = category_mapping.get(custom_category_id, f"Class_{custom_category_id}")
+                print(f"使用类别ID {custom_category_id} 映射到类别名称: {category_name}")
+                print(f"类别映射内容: {category_mapping}")
                 
                 # 调试输出
-                print(f"类别ID: {category_id}, 映射名称: {category_name}")
+                print(f"类别ID: {category_id}, 映射名称: {category_name}, 置信度: {score_value:.3f}")
                 
                 # 确保box坐标在图像范围内
                 box = [
@@ -528,8 +551,12 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
                     max(0, min(box[3], img_h))
                 ]
                 
+                # 使用统一的颜色和宽度绘制边界框
+                box_color = "red"
+                box_width = 3
+                
                 # 绘制边界框
-                draw.rectangle(box, outline="red", width=3)
+                draw.rectangle(box, outline=box_color, width=box_width)
                 
                 # 准备文本
                 text = f"{category_name}: {score_value:.2f}"
@@ -543,6 +570,10 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
                     text_y = max(2, box[1] + 2)
                 
                 text_position = (text_x, text_y)
+                
+                # 使用统一的文本颜色
+                text_color = "white"
+                bg_color = "red"  # 保持背景色一致
                 
                 # 绘制带背景的文本
                 try:
@@ -574,20 +605,28 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
                     bg_box[3] = min(img_h, bg_box[3])
                     
                     # 绘制背景
-                    draw.rectangle(bg_box, fill="red")
+                    draw.rectangle(bg_box, fill=bg_color)
                     
                     # 绘制文本
-                    draw.text(text_position, text, fill="white", font=font)
+                    draw.text(text_position, text, fill=text_color, font=font)
                     drawn_boxes += 1
                     
                 except Exception as e:
                     print(f"Error drawing text for {category_name}: {e}")
                     # 最后的备选：直接绘制文本
                     try:
-                        draw.text(text_position, text, fill="red", font=font)
+                        draw.text(text_position, text, fill=box_color, font=font)
                         drawn_boxes += 1
                     except:
                         pass
+            
+            # 添加最终的调试信息
+            print(f"Total predicted boxes after filtering: {drawn_boxes}")
+            if drawn_boxes == 0:
+                print("警告: 没有预测框被绘制。可能的原因:")
+                print("1. 所有预测的置信度都低于阈值 ({:.2f})".format(confidence_threshold))
+                print("2. 模型可能没有正确训练或加载")
+                print("3. 输入图像可能不包含模型训练时见过的类别")
         else:
             print("No predicted boxes to draw.")
     else:

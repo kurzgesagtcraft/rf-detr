@@ -28,7 +28,7 @@ class ModelConfig(BaseModel):
     pretrain_weights: Optional[str] = None
     device: Literal["cpu", "cuda", "mps"] = DEVICE
     resolution: int = 560
-    group_detr: int = 13
+    group_detr: int = 10
     gradient_checkpointing: bool = False
 
 class RFDETRBaseConfig(ModelConfig):
@@ -73,6 +73,8 @@ class TrainConfig(BaseModel):
     dataset_file: Literal["coco", "o365", "roboflow"] = "coco"
     square_resize_div_64: bool = True
     dataset_dir: str = "./dataset"
+    train_annotations_path: Optional[str] = "./dataset/annotations/instances_train2017.json"
+    val_annotations_path: Optional[str] = "./dataset/annotations/instances_val2017.json"
     output_dir: str = "output"
     multi_scale: bool = True
     expanded_scales: bool = True

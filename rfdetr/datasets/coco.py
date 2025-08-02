@@ -202,6 +202,10 @@ def build(image_set, args, resolution):
     }
     
     img_folder, ann_file = PATHS[image_set.split("_")[0]]
+
+    # Override validation annotation file path if provided in args
+    if image_set == 'val' and hasattr(args, 'val_annotations_path') and args.val_annotations_path is not None:
+        ann_file = args.val_annotations_path
     
     try:
         square_resize = args.square_resize

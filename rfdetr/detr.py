@@ -94,9 +94,9 @@ class RFDETR:
         self.model.export(**kwargs)
 
     def train_from_config(self, config: TrainConfig, **kwargs):
-        with open(
-            os.path.join(config.dataset_dir, "train", "_annotations.coco.json"), "r"
-        ) as f:
+        # This logic is now handled by the dataset builder and the main training loop
+        # We still need to pass the num_classes to the training loop
+        with open(config.train_annotations_path, "r") as f:
             anns = json.load(f)
             num_classes = len(anns["categories"])
             class_names = [c["name"] for c in anns["categories"] if c["supercategory"] != "none"]
