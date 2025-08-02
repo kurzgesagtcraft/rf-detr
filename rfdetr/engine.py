@@ -95,10 +95,19 @@ def train_one_epoch(
     optimizer.zero_grad()
     assert batch_size % args.grad_accum_steps == 0
     sub_batch_size = batch_size // args.grad_accum_steps
-    print("LENGTH OF DATA LOADER:", len(data_loader))
+    print(f"Starting train_one_epoch for epoch {epoch}")
+    print(f"LENGTH OF DATA LOADER:", len(data_loader))
+    print(f"representative_image_ids: {representative_image_ids}")
+    if representative_image_ids is not None and len(representative_image_ids) > 0:
+        print(f"First few representative_image_ids: {list(representative_image_ids)[:10]}")
     for data_iter_step, (samples, targets) in enumerate(
         metric_logger.log_every(data_loader, print_freq, header)
     ):
+        print(f"Processing epoch {epoch}, data_iter_step {data_iter_step}")
+        # 在每个epoch开始时检查是否应该保存图像
+        if data_iter_step == 0:
+            print(f"First batch of epoch {epoch}, will attempt to save visualization")
+        
         it = start_steps + data_iter_step
         callback_dict = {
             "step": it,
@@ -133,11 +142,35 @@ def train_one_epoch(
                 
                 # 新增的可视化步骤
                 # Save images periodically to check detection results
-                if epoch % 5 == 0 and data_iter_step % 100 == 0:
-                    try:
-                        save_detection_images(outputs, new_targets, new_samples, epoch, coco_dataset=coco_dataset, criterion=criterion)
-                    except Exception as e:
-                        print(f"Error saving detection image in epoch {epoch}: {e}")
+                # 选择一些代表性的图片在每个epoch都保存其预测结果
+                # 检查当前batch中的图像是否在representative_image_ids中
+                for i, target in enumerate(new_targets):
+                    image_id = target['image_id'].item()
+                    print(f"Checking image saving condition for epoch {epoch}, image_id: {image_id}")
+                    print(f"representative_image_ids is None: {representative_image_ids is None}")
+                    if representative_image_ids is not None:
+                        print(f"image_id {image_id} in representative_image_ids: {image_id in representative_image_ids}")
+                        if len(representative_image_ids) > 0:
+                            print(f"First few representative_image_ids: {list(representative_image_ids)[:10]}")
+                    
+                    # 如果图像在representative_image_ids中，则保存它
+                    if representative_image_ids is None or image_id in representative_image_ids:
+                        print(f"Attempting to save detection image for epoch {epoch}, image_id: {image_id}")
+                        try:
+                            # 为当前目标创建新的targets和samples列表
+                            single_target = [target]
+                            single_sample_tensors = new_samples.tensors[i:i+1]
+                            single_sample_mask = new_samples.mask[i:i+1]
+                            single_sample = NestedTensor(single_sample_tensors, single_sample_mask)
+                            
+                            save_detection_images(outputs, single_target, single_sample, epoch, coco_dataset=coco_dataset, criterion=criterion)
+                            print(f"Successfully saved detection image for epoch {epoch}, image_id: {image_id}")
+                            # 一旦找到并保存了一个代表性图像，就跳出循环
+                            break
+                        except Exception as e:
+                            print(f"Error saving detection image in epoch {epoch}, image_id {image_id}: {e}")
+                            import traceback
+                            traceback.print_exc()  # 打印详细的错误信息
 
                 loss_dict = criterion(outputs, new_targets)
                 weight_dict = criterion.weight_dict
@@ -396,14 +429,51 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
     Saves images by drawing matched predicted boxes on top of the original images
     which already contain ground truth boxes.
     """
+    print(f"save_detection_images called with epoch: {epoch}")
+    
     # Get image_id and filename
     target = targets[0]
     image_id = target['image_id'].item()
-    img_info = coco_dataset.loadImgs(image_id)[0]
-    img_filename = img_info['file_name']
-
+    print(f"Processing image_id: {image_id}")
+    
+    # Check if coco_dataset is valid
+    if coco_dataset is None:
+        print("Warning: coco_dataset is None, using fallback method")
+        # 使用一个简单的回退方法
+        img_filename = f"{image_id:012d}.jpg"  # COCO数据集的标准文件名格式
+    else:
+        try:
+            img_info = coco_dataset.loadImgs(image_id)[0]
+            img_filename = img_info['file_name']
+            print(f"Image filename: {img_filename}")
+        except Exception as e:
+            print(f"Error getting image info: {e}")
+            # 回退到标准的COCO文件名格式
+            img_filename = f"{image_id:012d}.jpg"
+    
     # Load the original image from the visual dataset (which has GT boxes)
     original_image_path = os.path.join("dataset/visual/train", img_filename)
+    print(f"Looking for original image at: {original_image_path}")
+    
+    # 检查目录是否存在
+    visual_train_dir = "dataset/visual/train"
+    if not os.path.exists(visual_train_dir):
+        print(f"Warning: Visual train directory does not exist: {visual_train_dir}")
+        # 列出dataset目录的内容
+        if os.path.exists("dataset"):
+            print("Contents of dataset directory:")
+            for item in os.listdir("dataset"):
+                print(f"  {item}")
+        else:
+            print("Dataset directory does not exist")
+    else:
+        print(f"Visual train directory exists: {visual_train_dir}")
+        # 列出目录中的文件数量
+        files = os.listdir(visual_train_dir)
+        print(f"Number of files in visual train directory: {len(files)}")
+        if len(files) > 0:
+            print(f"First few files: {files[:5]}")
+    
     if not os.path.exists(original_image_path):
         # If not found, try to reconstruct from the tensor
         print(f"Warning: Original image not found at {original_image_path}. Reconstructing from tensor.")
@@ -453,8 +523,14 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
     # Get original size for scaling boxes
     orig_size = target['orig_size']
     img_h, img_w = orig_size.cpu().numpy()
+    print(f"Image dimensions: {img_w}x{img_h}")
 
     # Prepare output directory
+    # 确保输出目录存在
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Created output directory: {output_dir}")
+    
     img_name_without_ext = os.path.splitext(img_filename)[0]
     img_output_dir = os.path.join(output_dir, img_name_without_ext)
     os.makedirs(img_output_dir, exist_ok=True)
@@ -630,11 +706,18 @@ def save_detection_images(outputs, targets, samples, epoch, output_dir="./result
         else:
             print("No predicted boxes to draw.")
     else:
-        print("Warning: `criterion` not provided to `save_detection_images`. Cannot determine which boxes are used for loss. Skipping image save.")
-        return
+        print("Warning: `criterion` not provided to `save_detection_images`. Saving image without predicted boxes.")
+        # 即使没有criterion，也保存原始图像
+        pass  # 继续执行保存图像的代码
 
-    # Save the modified image
+    # Save the modified image with unique filename to prevent overwriting
     save_path = os.path.join(img_output_dir, f"epoch_{epoch}.png")
-    img.save(save_path)
-    print(f"Image saved to {save_path} with {drawn_boxes} labeled boxes")
+    print(f"Attempting to save image to: {save_path}")
+    try:
+        img.save(save_path)
+        print(f"Image saved to {save_path} with {drawn_boxes} labeled boxes")
+    except Exception as e:
+        print(f"Error saving image to {save_path}: {e}")
+        import traceback
+        traceback.print_exc()
     sys.stdout.flush()  # Ensure immediate output

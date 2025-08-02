@@ -582,7 +582,7 @@ def populate_args(
     lr_encoder=1.5e-4,
     batch_size=2,
     weight_decay=1e-4,
-    epochs=12,
+    epochs=100,
     lr_drop=11,
     clip_max_norm=0.1,
     lr_vit_layer_decay=0.8,
@@ -808,7 +808,7 @@ def get_args_parser():
     parser.add_argument('--lr_encoder', default=1.5e-4, type=float)
     parser.add_argument('--batch_size', default=1, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
-    parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--epochs', default=100, type=int)
     parser.add_argument('--lr_drop', default=11, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
